@@ -1053,16 +1053,35 @@
 
     <div class="form-group">
       <label class="form-label">Scan mode</label>
-      <select class="form-input" id="scanModeSelect">
+      <select class="form-input" id="scanModeSelect" onchange="onScanModeChange()">
         <option value="my-orgs">My orgs only (orgs I belong to)</option>
-        <option value="all-orgs">All orgs on instance (slow, thorough)</option>
+        <option value="pick-orgs">Pick orgs from instance</option>
         <option value="custom">Custom orgs only</option>
       </select>
       <p class="form-hint">
         <strong>My orgs</strong>: fast, only orgs your token has membership in.<br>
-        <strong>All orgs</strong>: scans every org on the instance — can be very slow on large instances.<br>
+        <strong>Pick orgs</strong>: load the full org list and choose which ones to scan.<br>
         <strong>Custom</strong>: use the org filter field above, or add orgs via the Org Browser.
       </p>
+    </div>
+
+    <div class="form-group" id="pickOrgsGroup" style="display:none">
+      <label class="form-label">
+        Select orgs to scan
+        <span id="pickOrgsCount" style="font-weight:400;color:var(--text-muted);margin-left:6px"></span>
+      </label>
+      <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
+        <input id="pickOrgsSearch" class="form-input" type="text" placeholder="Filter orgs…" style="flex:1;padding:7px 10px;font-size:13px"
+          oninput="filterPickOrgsList()" />
+        <button class="btn" type="button" onclick="loadOrgPickerList()" id="loadOrgsBtn">Load orgs</button>
+      </div>
+      <div id="pickOrgsList" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2);padding:4px">
+        <div style="padding:12px;text-align:center;color:var(--text-muted);font-size:13px">Click "Load orgs" to fetch the list</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn" type="button" style="font-size:12px;padding:4px 10px" onclick="selectAllPickOrgs(true)">Select all</button>
+        <button class="btn" type="button" style="font-size:12px;padding:4px 10px" onclick="selectAllPickOrgs(false)">Deselect all</button>
+      </div>
     </div>
 
     <div class="form-group">
@@ -1236,8 +1255,9 @@ const state = {
     ghBaseUrl: '',
     ghToken: '',
     ghOrgFilter: '',
-    scanMode: 'my-orgs',   // 'my-orgs' | 'all-orgs' | 'custom'
+    scanMode: 'my-orgs',   // 'my-orgs' | 'pick-orgs' | 'custom'
     extraOrgs: [],         // manually added org logins
+    pickedOrgs: [],        // orgs chosen in pick-orgs mode
     theme: 'system',
     autoRefresh: true,
     showArchived: false,
@@ -1277,6 +1297,10 @@ function loadState() {
 function saveSettings() {
   state.settings.ghOrgFilter = document.getElementById('ghOrgFilter').value.trim();
   state.settings.scanMode = document.getElementById('scanModeSelect').value;
+  // persist picked orgs from checkboxes
+  if (state.settings.scanMode === 'pick-orgs') {
+    state.settings.pickedOrgs = getCheckedPickOrgs();
+  }
   localStorage.setItem('ghpe_settings', JSON.stringify(state.settings));
   closeSettings();
   toast('Settings saved', 'success');
@@ -1374,11 +1398,14 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 function openSettings() {
   document.getElementById('ghOrgFilter').value = state.settings.ghOrgFilter;
   document.getElementById('themeSelect').value = state.settings.theme;
-  document.getElementById('scanModeSelect').value = state.settings.scanMode || 'my-orgs';
+  // migrate legacy 'all-orgs' value
+  const mode = state.settings.scanMode === 'all-orgs' ? 'pick-orgs' : (state.settings.scanMode || 'my-orgs');
+  document.getElementById('scanModeSelect').value = mode;
   updateToggleUI('autoRefresh');
   updateToggleUI('showArchived');
   _pendingPinned = [...(state.settings.extraOrgs || [])];
   renderSettingsPinnedChips();
+  onScanModeChange();
   document.getElementById('settingsModal').style.display = 'flex';
 }
 
@@ -1502,19 +1529,20 @@ async function fetchAllPages(path, params = {}) {
 async function getAccessibleOrgs() {
   const { scanMode, ghOrgFilter, extraOrgs } = state.settings;
 
-  if (scanMode === 'all-orgs') {
-    // Fetch every org on the instance via /organizations
-    return fetchAllPages('/organizations');
+  if (scanMode === 'all-orgs' || scanMode === 'pick-orgs') {
+    const picked = state.settings.pickedOrgs || [];
+    if (picked.length) return picked.map(login => ({ login }));
+    // fallback: if nothing picked yet, just use membership orgs
+    return fetchAllPages('/user/orgs');
   }
 
   if (scanMode === 'custom') {
-    // Union of manually-pinned extraOrgs + legacy comma filter
     const fromFilter = (ghOrgFilter || '').split(',').map(o => o.trim()).filter(Boolean);
     const all = [...new Set([...fromFilter, ...(extraOrgs || [])])];
     return all.map(login => ({ login }));
   }
 
-  // 'my-orgs' (default): orgs the token owner belongs to
+  // 'my-orgs' (default)
   const mine = await fetchAllPages('/user/orgs');
 
   // Merge any extra orgs on top
@@ -2011,6 +2039,92 @@ function clearCache() {
   document.getElementById('toolbar').style.display = 'none';
   document.getElementById('orgFilters').innerHTML = '';
   document.getElementById('tagFilters').innerHTML = '';
+}
+
+// ── Org Picker (pick-orgs mode) ───────────────────────────────────────────────
+let _allOrgPickerItems = [];
+
+function onScanModeChange() {
+  const mode = document.getElementById('scanModeSelect').value;
+  document.getElementById('pickOrgsGroup').style.display = mode === 'pick-orgs' ? '' : 'none';
+  if (mode === 'pick-orgs' && _allOrgPickerItems.length === 0) {
+    // auto-load if we already have a token
+    if (state.settings.ghToken) loadOrgPickerList();
+  }
+}
+
+async function loadOrgPickerList() {
+  const btn = document.getElementById('loadOrgsBtn');
+  const listEl = document.getElementById('pickOrgsList');
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  listEl.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:13px">Fetching orgs…</div>';
+  try {
+    _allOrgPickerItems = await fetchAllPages('/organizations');
+    _allOrgPickerItems.sort((a, b) => a.login.localeCompare(b.login));
+    renderPickOrgsList();
+    btn.textContent = 'Reload';
+  } catch(e) {
+    listEl.innerHTML = `<div style="padding:12px;color:var(--error);font-size:13px">Failed to load: ${escHtml(e.message)}</div>`;
+    btn.textContent = 'Retry';
+  }
+  btn.disabled = false;
+}
+
+function renderPickOrgsList() {
+  const listEl = document.getElementById('pickOrgsList');
+  const filter = (document.getElementById('pickOrgsSearch')?.value || '').toLowerCase();
+  const picked = new Set(state.settings.pickedOrgs || []);
+  const visible = _allOrgPickerItems.filter(o => !filter || o.login.toLowerCase().includes(filter));
+  if (!visible.length) {
+    listEl.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:13px">No orgs match</div>';
+    updatePickOrgsCount();
+    return;
+  }
+  listEl.innerHTML = visible.map(org => `
+    <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:13px"
+      onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">
+      <input type="checkbox" value="${escHtml(org.login)}" ${picked.has(org.login) ? 'checked' : ''}
+        onchange="onPickOrgToggle(this)" style="width:15px;height:15px;cursor:pointer;accent-color:var(--accent)" />
+      ${org.avatar_url ? `<img src="${escHtml(org.avatar_url)}" style="width:20px;height:20px;border-radius:4px;flex-shrink:0"
+        onerror="this.style.display='none'" />` : ''}
+      <span style="color:var(--text)">${escHtml(org.login)}</span>
+    </label>`).join('');
+  updatePickOrgsCount();
+}
+
+function filterPickOrgsList() {
+  renderPickOrgsList();
+}
+
+function onPickOrgToggle(checkbox) {
+  const login = checkbox.value;
+  const picked = new Set(state.settings.pickedOrgs || []);
+  checkbox.checked ? picked.add(login) : picked.delete(login);
+  state.settings.pickedOrgs = [...picked];
+  updatePickOrgsCount();
+}
+
+function getCheckedPickOrgs() {
+  return [...document.querySelectorAll('#pickOrgsList input[type=checkbox]:checked')].map(c => c.value);
+}
+
+function selectAllPickOrgs(checked) {
+  document.querySelectorAll('#pickOrgsList input[type=checkbox]').forEach(c => {
+    c.checked = checked;
+    const login = c.value;
+    const picked = new Set(state.settings.pickedOrgs || []);
+    checked ? picked.add(login) : picked.delete(login);
+    state.settings.pickedOrgs = [...picked];
+  });
+  updatePickOrgsCount();
+}
+
+function updatePickOrgsCount() {
+  const el = document.getElementById('pickOrgsCount');
+  if (!el) return;
+  const n = (state.settings.pickedOrgs || []).length;
+  el.textContent = n ? `(${n} selected)` : '(none selected)';
 }
 
 // ── Org Browser ──────────────────────────────────────────────────────────────
