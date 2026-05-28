@@ -1049,7 +1049,7 @@
 
     <div class="form-group">
       <label class="form-label">Scan mode</label>
-      <select class="form-input" id="scanModeSelect" onchange="onScanModeChange()">
+      <select class="form-input" id="scanModeSelect" onchange="onScanModeChange(true)">
         <option value="my-orgs">My orgs only (orgs I belong to)</option>
         <option value="all-orgs">All orgs on instance</option>
         <option value="pick-orgs">Pick orgs from instance</option>
@@ -1457,7 +1457,7 @@ function openSettings() {
   updateToggleUI('showArchived');
   _pendingPinned = [...(state.settings.extraOrgs || [])];
   renderSettingsPinnedChips();
-  onScanModeChange();
+  onScanModeChange(false);
   document.getElementById('settingsModal').style.display = 'flex';
 }
 
@@ -2164,10 +2164,11 @@ let _orgPickerLoading = false;
 let _orgPickerDone = false;
 let _orgPickerSearchTimer = null;
 
-function onScanModeChange() {
+function onScanModeChange(userTriggered = false) {
   const mode = document.getElementById('scanModeSelect').value;
   document.getElementById('pickOrgsGroup').style.display = mode === 'pick-orgs' ? '' : 'none';
-  if (mode === 'pick-orgs' && _allOrgPickerItems.length === 0 && state.settings.ghToken) {
+  // Only kick off the org picker fetch when the user explicitly switches to pick-orgs
+  if (userTriggered && mode === 'pick-orgs' && _allOrgPickerItems.length === 0 && state.settings.ghToken) {
     initOrgPicker();
   }
 }
