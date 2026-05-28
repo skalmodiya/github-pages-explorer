@@ -1600,7 +1600,6 @@ async function startFetch() {
   const toolbar = document.getElementById('toolbar');
   const errArea = document.getElementById('errorArea');
   errArea.innerHTML = '';
-  toolbar.style.display = 'none';
 
   area.innerHTML = `
     <div class="state-box" id="loadingBox">
@@ -1619,9 +1618,19 @@ async function startFetch() {
     const pagesFound = [];
     let done = 0;
 
-    for (const org of orgs) {
-      setProgress(5 + Math.round((done / orgs.length) * 85), `Scanning ${org.login} (${done + 1}/${orgs.length})…`);
+    const updateProgress = () => {
+      setProgress(5 + Math.round((done / orgs.length) * 90), `Scanned ${done}/${orgs.length} orgs — ${pagesFound.length} sites found…`);
+    };
 
+    // show toolbar early so results can stream in
+    toolbar.style.display = 'flex';
+    state.allPages = pagesFound;
+
+    // process orgs with concurrency limit of 4
+    const CONCURRENCY = 4;
+    let idx = 0;
+
+    async function processOrg(org) {
       let repos;
       try {
         repos = await fetchAllPages(`/orgs/${org.login}/repos`, { type: 'all' });
@@ -1629,29 +1638,16 @@ async function startFetch() {
         repos = [];
       }
 
-      // Also include user's own repos for self (first run)
-      if (orgs.length === 1 && !state.settings.ghOrgFilter) {
-        try {
-          const userRepos = await fetchAllPages('/user/repos', { type: 'owner' });
-          repos.push(...userRepos);
-        } catch(e) {}
-      }
-
-      // Deduplicate
       const seen = new Set();
       repos = repos.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; });
+      if (!state.settings.showArchived) repos = repos.filter(r => !r.archived);
 
-      if (!state.settings.showArchived) {
-        repos = repos.filter(r => !r.archived);
-      }
-
-      // Check pages in batches of 5 concurrently
-      for (let i = 0; i < repos.length; i += 5) {
-        const batch = repos.slice(i, i + 5);
+      // check pages with concurrency of 20
+      for (let i = 0; i < repos.length; i += 20) {
+        const batch = repos.slice(i, i + 20);
         const results = await Promise.all(batch.map(async r => {
           const pages = await hasGitHubPages(r.owner.login, r.name);
-          if (pages) return { repo: r, pages };
-          return null;
+          return pages ? { repo: r, pages } : null;
         }));
         results.filter(Boolean).forEach(({ repo, pages }) => {
           pagesFound.push(buildEntry(repo, pages, org.login));
@@ -1659,15 +1655,33 @@ async function startFetch() {
       }
 
       done++;
+      updateProgress();
+
+      // stream results into the view as each org completes
+      if (pagesFound.length) {
+        state.allPages = [...pagesFound];
+        renderAll();
+      }
     }
 
+    // worker pool
+    async function worker() {
+      while (idx < orgs.length) {
+        const org = orgs[idx++];
+        await processOrg(org);
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, orgs.length) }, worker));
+
     setProgress(100, 'Done!');
-    state.allPages = pagesFound;
+    state.allPages = [...pagesFound];
     saveCache(pagesFound);
     renderAll();
     toast(`Found ${pagesFound.length} GitHub Pages site${pagesFound.length !== 1 ? 's' : ''}`, 'success');
   } catch (err) {
-    area.innerHTML = `<div class="state-box">
+    if (err.message === '401 Unauthorised') return;
+    document.getElementById('cardsArea').innerHTML = `<div class="state-box">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15" stroke="white" stroke-width="2" fill="none"/><line x1="9" y1="9" x2="15" y2="15" stroke="white" stroke-width="2" fill="none"/></svg>
       <h3>Error fetching data</h3>
       <p>${escHtml(err.message)}</p>
