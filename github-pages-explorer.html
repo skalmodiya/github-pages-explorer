@@ -1668,18 +1668,66 @@ function startFetch() { loadOrgList(); }
 
 // ── Org sidebar search + scroll-lazy rendering ────────────────────────────────
 let _orgSearchQuery = '';
-let _orgRenderedCount = 0;       // how many filtered orgs are currently in the DOM
+let _orgRenderedCount = 0;
+let _orgSearchTimer = null;
+let _orgApiSearchResults = [];   // results from /search/users API when local list is insufficient
+let _orgSearchMode = 'local';    // 'local' | 'api'
 const ORG_PAGE_SIZE = 100;
 
 function onOrgSearchInput() {
-  _orgSearchQuery = (document.getElementById('orgSearch')?.value || '').trim().toLowerCase();
+  _orgSearchQuery = (document.getElementById('orgSearch')?.value || '').trim();
   _orgRenderedCount = 0;
-  renderOrgSidebar(true);
+  _orgApiSearchResults = [];
+  clearTimeout(_orgSearchTimer);
+
+  if (!_orgSearchQuery) {
+    _orgSearchMode = 'local';
+    renderOrgSidebar(true);
+    return;
+  }
+
+  // If we have a large local list, filter it immediately
+  const localMatches = _filteredOrgs();
+  if (localMatches.length > 0) {
+    _orgSearchMode = 'local';
+    renderOrgSidebar(true);
+  } else {
+    // Local list empty or no matches — show spinner and search via API
+    _orgSearchMode = 'api';
+    const orgArea = document.getElementById('orgFilters');
+    if (orgArea) orgArea.innerHTML = `<div style="padding:10px;text-align:center;color:var(--text-muted);font-size:12px">
+      <span style="display:inline-block;width:10px;height:10px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:4px"></span>
+      Searching…</div>`;
+  }
+
+  _orgSearchTimer = setTimeout(_doApiOrgSearch, 350);
+}
+
+async function _doApiOrgSearch() {
+  const q = _orgSearchQuery;
+  if (!q) return;
+  try {
+    const { data } = await ghFetch('/search/users', { q: `${q} type:org`, per_page: 30 });
+    if (_orgSearchQuery !== q) return; // query changed while waiting
+    _orgApiSearchResults = (data.items || []).map(u => ({ login: u.login, avatar_url: u.avatar_url }));
+    // Merge into orgList so selectOrg can find them
+    _orgApiSearchResults.forEach(o => {
+      if (!state.orgList.find(x => x.login === o.login)) state.orgList.push(o);
+    });
+    _orgSearchMode = 'api';
+    _orgRenderedCount = 0;
+    renderOrgSidebar(true);
+  } catch(e) {
+    if (e.message === '401 Unauthorised') return;
+    const orgArea = document.getElementById('orgFilters');
+    if (orgArea) orgArea.innerHTML = `<div style="padding:8px 10px;font-size:12px;color:var(--error)">Search failed</div>`;
+  }
 }
 
 // Returns the filtered+scored org list based on current search query
 function _filteredOrgs() {
-  const q = _orgSearchQuery;
+  const q = _orgSearchQuery.toLowerCase();
+  if (_orgSearchMode === 'api' && _orgApiSearchResults.length) return _orgApiSearchResults;
   if (!q) return state.orgList;
   return state.orgList
     .map(o => ({ o, s: fuzzyMatch(o.login, q) }))
