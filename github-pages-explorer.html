@@ -1098,6 +1098,17 @@
     </div>
 
     <div class="form-actions">
+      <div style="display:flex;gap:6px;margin-right:auto">
+        <button class="btn" onclick="exportSettings()" title="Download all settings, tags, starred & token as a backup file">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export
+        </button>
+        <label class="btn" style="cursor:pointer;margin:0" title="Restore settings from a previously exported backup">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 5 17 10"/><line x1="12" y1="5" x2="12" y2="17"/></svg>
+          Import
+          <input type="file" accept=".json" style="display:none" onchange="importSettings(event)" />
+        </label>
+      </div>
       <button class="btn" onclick="closeSettings()">Cancel</button>
       <button class="btn btn-primary" onclick="saveSettings()">Save & Apply</button>
     </div>
@@ -1270,6 +1281,48 @@ function saveSettings() {
   startFetch();
 }
 
+function exportSettings() {
+  const payload = {
+    _version: 1,
+    _exported: new Date().toISOString(),
+    token: localStorage.getItem('ghpe_token') || '',
+    settings: localStorage.getItem('ghpe_settings') || '{}',
+    tags: localStorage.getItem('ghpe_tags') || '{}',
+    starred: localStorage.getItem('ghpe_starred') || '{}',
+    view: localStorage.getItem('ghpe_view') || 'table',
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `sap-pages-explorer-backup-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('Settings exported', 'success');
+}
+
+function importSettings(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const payload = JSON.parse(e.target.result);
+      if (!payload._version) throw new Error('Unrecognised file format');
+      if (payload.token)    localStorage.setItem('ghpe_token', payload.token);
+      if (payload.settings) localStorage.setItem('ghpe_settings', payload.settings);
+      if (payload.tags)     localStorage.setItem('ghpe_tags', payload.tags);
+      if (payload.starred)  localStorage.setItem('ghpe_starred', payload.starred);
+      if (payload.view)     localStorage.setItem('ghpe_view', payload.view);
+      toast('Settings imported — reloading…', 'success');
+      setTimeout(() => window.location.reload(), 1000);
+    } catch(err) {
+      toast(`Import failed: ${err.message}`, 'error');
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = '';
+}
+
 function saveCache(data) {
   try { localStorage.setItem('ghpe_cache', JSON.stringify({ ts: Date.now(), data })); } catch(e) {}
 }
@@ -1417,6 +1470,12 @@ async function ghFetch(path, params = {}) {
   });
 
   if (!res.ok) {
+    if (res.status === 401) {
+      localStorage.removeItem('ghpe_token');
+      state.settings.ghToken = '';
+      showLoginScreen('Your token has expired or been revoked. Please enter a new one.');
+      throw new Error('401 Unauthorised');
+    }
     const msg = await res.text().catch(() => '');
     throw new Error(`GitHub API error ${res.status}: ${msg.slice(0, 200)}`);
   }
