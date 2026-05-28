@@ -1998,48 +1998,68 @@ async function selectOrg(login) {
     return;
   }
 
-  // show per-org spinner
+  // Show toolbar + empty table immediately so the user sees the org banner + structure
+  state.filters.org = login;
+  toolbar.style.display = 'flex';
+  state.allPages = Object.values(state.orgCache).flatMap(e => e.pages);
+  applyFilters();
   state.orgLoading[login] = true;
   renderSidebar();
-  area.innerHTML = `<div class="state-box">
-    <div class="spinner"></div>
-    <h3>Scanning <strong>${escHtml(login)}</strong>…</h3>
-    <p style="color:var(--text-muted);font-size:13px">Checking repos for GitHub Pages…</p>
-  </div>`;
+
+  // Show a slim progress bar / status in the results count while scanning
+  const resultsCount = document.getElementById('resultsCount');
 
   try {
-    let repos = [];
-    try { repos = await fetchAllPages(`/orgs/${login}/repos`, { type: 'all' }); } catch(e) {}
-
-    const seen = new Set();
-    repos = repos.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; });
-    if (!state.settings.showArchived) repos = repos.filter(r => !r.archived);
-
-    // Use has_pages flag to skip the /pages API call for the vast majority of repos
-    const pagesRepos = repos.filter(r => r.has_pages);
+    // Fetch repo list page by page, streaming pages results as they arrive
     const pagesFound = [];
-    for (let i = 0; i < pagesRepos.length; i += 10) {
-      const results = await Promise.all(pagesRepos.slice(i, i + 10).map(async r => {
-        const pages = await hasGitHubPages(r.owner.login, r.name);
-        return pages ? { repo: r, pages } : null;
-      }));
-      results.filter(Boolean).forEach(({ repo, pages }) => {
-        pagesFound.push(buildEntry(repo, pages, login));
-      });
+    let repoPage = 1;
+    let totalRepos = 0;
+
+    while (true) {
+      if (state.selectedOrg !== login) return; // user clicked away
+      const { data: repoPage_data, linkHeader } = await ghFetch(`/orgs/${login}/repos`, { type: 'all', per_page: 100, page: repoPage });
+
+      const seen = new Set(pagesFound.map(p => p.id));
+      const filtered = repoPage_data.filter(r => !seen.has(r.full_name) && (state.settings.showArchived || !r.archived));
+      totalRepos += filtered.length;
+
+      const pagesRepos = filtered.filter(r => r.has_pages);
+
+      // Check pages for this batch concurrently
+      for (let i = 0; i < pagesRepos.length; i += 10) {
+        if (state.selectedOrg !== login) return;
+        const results = await Promise.all(pagesRepos.slice(i, i + 10).map(async r => {
+          const pages = await hasGitHubPages(r.owner.login, r.name);
+          return pages ? { repo: r, pages } : null;
+        }));
+        results.filter(Boolean).forEach(({ repo, pages }) => {
+          pagesFound.push(buildEntry(repo, pages, login));
+        });
+      }
+
+      // Stream: update results after each repo page
+      if (pagesFound.length) {
+        state.orgCache[login] = { pages: pagesFound, ts: Date.now() };
+        state.allPages = Object.values(state.orgCache).flatMap(e => e.pages);
+        applyFilters();
+      }
+      if (resultsCount) resultsCount.innerHTML = `<span style="display:inline-flex;align-items:center;gap:5px"><span style="display:inline-block;width:10px;height:10px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;flex-shrink:0"></span>${pagesFound.length} found · scanning repos…</span>`;
+
+      if (!linkHeader.includes('rel="next"')) break;
+      repoPage++;
     }
 
     state.orgCache[login] = { pages: pagesFound, ts: Date.now() };
     saveOrgCache();
     state.allPages = Object.values(state.orgCache).flatMap(e => e.pages);
     state.filters.org = login;
-    toolbar.style.display = 'flex';
-    renderAll();
+    applyFilters();
     renderSidebar();
     toast(`${pagesFound.length} page${pagesFound.length !== 1 ? 's' : ''} found in ${login}`, 'success');
   } catch(err) {
     if (err.message === '401 Unauthorised') return;
-    area.innerHTML = `<div class="state-box">
-      <h3>Error scanning ${escHtml(login)}</h3><p>${escHtml(err.message)}</p></div>`;
+    if (state.selectedOrg === login)
+      area.innerHTML = `<div class="state-box"><h3>Error scanning ${escHtml(login)}</h3><p>${escHtml(err.message)}</p></div>`;
   } finally {
     delete state.orgLoading[login];
     renderSidebar();
