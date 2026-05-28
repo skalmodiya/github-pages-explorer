@@ -946,6 +946,10 @@
   </div>
 
   <div class="header-actions">
+    <button class="btn" onclick="openSearchAddModal()" title="Search all loaded orgs and bookmark pages">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      Search &amp; Add
+    </button>
     <button class="btn" onclick="openAddPageModal()" title="Manually add a GitHub Pages URL">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       Add page
@@ -1183,6 +1187,28 @@
 
 <!-- Toast container -->
 <div class="toast-container" id="toastContainer"></div>
+
+<!-- Search & Add Pages Modal -->
+<div class="modal-overlay" id="searchAddModal" style="display:none" onclick="if(event.target===this)closeSearchAddModal()">
+  <div class="modal" style="max-width:580px;max-height:85vh;display:flex;flex-direction:column">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-shrink:0">
+      <h2 style="margin:0">Search &amp; Add Pages</h2>
+      <button class="btn-icon btn" onclick="closeSearchAddModal()" title="Close"
+        style="font-size:18px;line-height:1;padding:4px 8px;border:none;background:transparent;color:var(--text-muted);cursor:pointer">×</button>
+    </div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;flex-shrink:0">Search across all loaded orgs and bookmark any page to your list.</p>
+    <div style="position:relative;flex-shrink:0;margin-bottom:12px">
+      <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:0.4;pointer-events:none" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="searchAddInput" class="form-input" type="text" placeholder="Search by repo name, org, or description…"
+        style="padding-left:32px;font-size:14px"
+        oninput="onSearchAddInput()" />
+    </div>
+    <div id="searchAddHint" style="font-size:12px;color:var(--text-muted);padding:4px 2px;flex-shrink:0"></div>
+    <div id="searchAddResults" style="flex:1;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2);min-height:120px">
+      <div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Start typing to search…</div>
+    </div>
+  </div>
+</div>
 
 <!-- Add / Edit Manual Page Modal -->
 <div class="modal-overlay" id="addPageModal" style="display:none">
@@ -2502,6 +2528,118 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ── Manual Pages ─────────────────────────────────────────────────────────────
+// ── Search & Add Modal ────────────────────────────────────────────────────────
+function openSearchAddModal() {
+  document.getElementById('searchAddInput').value = '';
+  document.getElementById('searchAddHint').textContent = '';
+  document.getElementById('searchAddResults').innerHTML =
+    '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Start typing to search…</div>';
+  document.getElementById('searchAddModal').style.display = 'flex';
+  setTimeout(() => document.getElementById('searchAddInput').focus(), 50);
+}
+
+function closeSearchAddModal() {
+  document.getElementById('searchAddModal').style.display = 'none';
+}
+
+function fuzzyMatch(str, query) {
+  // Returns a score > 0 if all query chars appear in order in str (case-insensitive).
+  // Higher score = tighter match (contiguous runs score more).
+  str = str.toLowerCase(); query = query.toLowerCase();
+  let si = 0, qi = 0, score = 0, consecutive = 0;
+  while (si < str.length && qi < query.length) {
+    if (str[si] === query[qi]) {
+      consecutive++;
+      score += consecutive;
+      qi++;
+    } else {
+      consecutive = 0;
+    }
+    si++;
+  }
+  return qi === query.length ? score : 0;
+}
+
+function onSearchAddInput() {
+  const q = document.getElementById('searchAddInput').value.trim();
+  const resultsEl = document.getElementById('searchAddResults');
+  const hintEl = document.getElementById('searchAddHint');
+
+  if (!q) {
+    hintEl.textContent = '';
+    resultsEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Start typing to search…</div>';
+    return;
+  }
+
+  // Search across all cached pages from all orgs
+  const pool = [...state.allPages];
+  const alreadyAdded = new Set(state.manualPages.map(m => m.pagesUrl));
+
+  const scored = pool.map(p => {
+    const s = Math.max(
+      fuzzyMatch(p.name, q) * 3,
+      fuzzyMatch(p.org, q) * 2,
+      fuzzyMatch(p.description || '', q)
+    );
+    return { p, s };
+  }).filter(x => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 30);
+
+  if (!scored.length) {
+    hintEl.textContent = '';
+    resultsEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">No matches found.</div>';
+    return;
+  }
+
+  hintEl.textContent = `${scored.length} result${scored.length !== 1 ? 's' : ''}`;
+
+  resultsEl.innerHTML = scored.map(({ p }) => {
+    const added = alreadyAdded.has(p.pagesUrl);
+    return `<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--border);transition:background 0.15s"
+        onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">
+      ${p.avatarUrl ? `<img src="${escHtml(p.avatarUrl)}" style="width:26px;height:26px;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">` : ''}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.name)}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${escHtml(p.org)}${p.description ? ' · ' + escHtml(p.description.slice(0, 80)) : ''}</div>
+      </div>
+      <a href="${escHtml(p.pagesUrl)}" target="_blank" rel="noopener"
+        style="font-size:11px;color:var(--accent);text-decoration:none;flex-shrink:0;padding:2px 4px"
+        onclick="event.stopPropagation()" title="Open site">↗</a>
+      <button class="btn ${added ? '' : 'btn-primary'}" style="font-size:11px;padding:4px 10px;flex-shrink:0"
+        ${added ? 'disabled title="Already in your list"' : `onclick="searchAddBookmark(${JSON.stringify(p.id)});renderSearchAddResults()"`}>
+        ${added ? '✓ Added' : '+ Add'}
+      </button>
+    </div>`;
+  }).join('');
+}
+
+function searchAddBookmark(pageId) {
+  const p = state.allPages.find(x => x.id === pageId);
+  if (!p) return;
+  if (state.manualPages.some(m => m.pagesUrl === p.pagesUrl)) return;
+  state.manualPages.push({
+    id: 'manual:' + Date.now(),
+    name: p.name,
+    org: p.org,
+    description: p.description || '',
+    pagesUrl: p.pagesUrl,
+    htmlUrl: p.htmlUrl,
+    updatedAt: p.updatedAt,
+    avatarUrl: p.avatarUrl,
+    archived: p.archived,
+    isPrivate: p.isPrivate,
+    fullName: p.fullName,
+    manual: true,
+  });
+  localStorage.setItem('ghpe_manual', JSON.stringify(state.manualPages));
+  renderAll();
+  toast(`"${p.name}" added to your list`, 'success');
+}
+
+function renderSearchAddResults() {
+  // Re-render results in place to update button states after adding
+  onSearchAddInput();
+}
+
 let _editingManualId = null;
 
 function openAddPageModal(id = null) {
