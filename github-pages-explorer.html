@@ -2038,11 +2038,11 @@ async function selectOrg(login) {
         });
       }
 
-      // Stream: update results after each repo page
+      // Stream: update results after each repo page — append new rows without rebuilding
       if (pagesFound.length) {
         state.orgCache[login] = { pages: pagesFound, ts: Date.now() };
         state.allPages = Object.values(state.orgCache).flatMap(e => e.pages);
-        applyFilters();
+        applyFilters({ appendOnly: true });
       }
       if (resultsCount) resultsCount.innerHTML = `<span style="display:inline-flex;align-items:center;gap:5px"><span style="display:inline-block;width:10px;height:10px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;flex-shrink:0"></span>${pagesFound.length} found · scanning repos…</span>`;
 
@@ -2113,7 +2113,7 @@ function renderAll() {
   document.getElementById('toolbar').style.display = 'flex';
 }
 
-function applyFilters() {
+function applyFilters({ appendOnly = false } = {}) {
   state.search = document.getElementById('searchInput').value.toLowerCase();
   state.sort = document.getElementById('sortSelect')?.value || 'name';
 
@@ -2141,10 +2141,25 @@ function applyFilters() {
     return 0;
   });
 
+  const prevCount = state.filtered ? state.filtered.length : 0;
   state.filtered = list;
   const total = state.allPages.length + state.manualPages.length;
   document.getElementById('resultsCount').textContent =
     `${list.length} of ${total} site${total !== 1 ? 's' : ''}`;
+
+  // appendOnly: during streaming, only append new rows rather than rebuilding the whole DOM
+  if (appendOnly && _cardsRendered > 0 && list.length > prevCount) {
+    const newItems = list.slice(prevCount);
+    const area = document.getElementById('cardsArea');
+    if (state.view === 'table') {
+      const tbody = area.querySelector('tbody');
+      if (tbody) newItems.forEach(p => { tbody.insertAdjacentHTML('beforeend', tableRowHTML(p)); });
+    } else {
+      newItems.forEach(p => area.insertAdjacentHTML('beforeend', cardHTML(p)));
+    }
+    _cardsRendered = list.length;
+    return;
+  }
 
   _cardsRendered = 0;
   renderCards();
@@ -2192,18 +2207,14 @@ function _appendCards() {
 }
 
 function _attachCardsScrollLoader() {
-  window.onscroll = () => {
-    if (_cardsRendered >= state.filtered.length) return;
-    if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 200) _appendCards();
-  };
-  // also listen on mainArea in case it is the scrolling container
   const main = document.getElementById('mainArea');
-  if (main) {
-    main.onscroll = () => {
-      if (_cardsRendered >= state.filtered.length) return;
-      if (main.scrollTop + main.clientHeight >= main.scrollHeight - 200) _appendCards();
-    };
-  }
+  if (!main) return;
+  // mainArea is the scrolling container (height: calc(100vh - 60px); overflow-y: auto)
+  // window never scrolls, so we must listen on main directly
+  main.addEventListener('scroll', function onMainScroll() {
+    if (_cardsRendered >= state.filtered.length) return;
+    if (main.scrollTop + main.clientHeight >= main.scrollHeight - 300) _appendCards();
+  }, { passive: true });
 }
 
 
