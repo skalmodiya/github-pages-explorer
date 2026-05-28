@@ -2622,7 +2622,10 @@ async function _startSearchScan() {
         if (cached && Date.now() - cached.ts < 30 * 60 * 1000) {
           pages = cached.pages;
         } else {
-          const repos = await fetchAllPages(`/orgs/${org.login}/repos`, { type: 'all' }).catch(() => []);
+          const repos = await fetchAllPages(`/orgs/${org.login}/repos`, { type: 'all' }).catch(e => {
+            if (e.message === '401 Unauthorised') throw e; // let 401 propagate
+            return [];
+          });
           if (runId !== _saRunId) return;
           const pagesRepos = repos.filter(r => r.has_pages && (!r.archived || state.settings.showArchived));
           pages = [];
@@ -2645,7 +2648,9 @@ async function _startSearchScan() {
             _saMatches.push({ p, s });
           }
         });
-      } catch(_) {}
+      } catch(e) {
+        if (e.message === '401 Unauthorised') return; // ghFetch already showed login screen
+      }
 
       _saOrgsScanned++;
       if (runId !== _saRunId) return;
