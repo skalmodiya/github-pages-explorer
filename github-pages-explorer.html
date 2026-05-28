@@ -941,7 +941,7 @@
 
 <!-- Header -->
 <header>
-  <a class="header-logo" href="." onclick="event.preventDefault();window.scrollTo(0,0);showAllOrgs();document.getElementById('searchInput').value=''">
+  <a class="header-logo" href="." onclick="event.preventDefault();window.scrollTo(0,0);showAllOrgs();document.getElementById('searchInput').value='';_gSearchRunId++;_updateSearchProgress('')">
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
     <span class="header-title">SAP Pages Explorer</span>
   </a>
@@ -2003,7 +2003,133 @@ function renderAll() {
   document.getElementById('toolbar').style.display = 'flex';
 }
 
-function applyFilters() {
+// ── Global header search scan ─────────────────────────────────────────────────
+// Scans ALL orgs on the instance regardless of scan mode, streaming results
+// into state.allPages and re-rendering as each org completes.
+let _gSearchRunId = 0;
+let _gSearchTimer = null;
+
+function onHeaderSearchInput() {
+  clearTimeout(_gSearchTimer);
+  const q = document.getElementById('searchInput').value.trim();
+  _gSearchRunId++; // cancel any previous scan
+
+  if (!q) {
+    applyFilters();
+    _updateSearchProgress('');
+    return;
+  }
+
+  // Show cached results immediately
+  applyFilters();
+
+  // Then kick off a full-domain scan after debounce
+  _gSearchTimer = setTimeout(() => _runGlobalSearchScan(q, _gSearchRunId), 400);
+}
+
+async function _runGlobalSearchScan(q, runId) {
+  if (!state.settings.ghToken) return;
+
+  // Build full org list: fetch all /organizations pages first (cheap, no repos yet)
+  // Use state.orgList if already populated, otherwise fetch page by page
+  let allOrgs = state.orgList.length ? [...state.orgList] : [];
+
+  if (!allOrgs.length) {
+    try {
+      let page = 1;
+      while (true) {
+        if (runId !== _gSearchRunId) return;
+        const { data, linkHeader } = await ghFetch('/organizations', { per_page: 100, page });
+        allOrgs.push(...data);
+        // Merge into state.orgList so sidebar benefits too
+        data.forEach(o => { if (!state.orgList.find(x => x.login === o.login)) state.orgList.push(o); });
+        if (!linkHeader.includes('rel="next"')) break;
+        page++;
+      }
+    } catch(e) { if (e.message === '401 Unauthorised') return; }
+  }
+
+  if (runId !== _gSearchRunId) return;
+
+  const total = allOrgs.length;
+  let scanned = 0;
+  const seenIds = new Set(state.allPages.map(p => p.id));
+
+  _updateSearchProgress(`Scanning 0 / ${total} orgs…`);
+
+  const CONCURRENCY = 3;
+  let idx = 0;
+
+  async function worker() {
+    while (true) {
+      if (runId !== _gSearchRunId) return;
+      const org = allOrgs[idx++];
+      if (!org) return;
+
+      try {
+        const cached = state.orgCache[org.login];
+        let pages;
+        if (cached && Date.now() - cached.ts < 30 * 60 * 1000) {
+          pages = cached.pages;
+        } else {
+          const repos = await fetchAllPages(`/orgs/${org.login}/repos`, { type: 'all' }).catch(e => {
+            if (e.message === '401 Unauthorised') throw e;
+            return [];
+          });
+          if (runId !== _gSearchRunId) return;
+          const pagesRepos = repos.filter(r => r.has_pages && (!r.archived || state.settings.showArchived));
+          pages = [];
+          for (let i = 0; i < pagesRepos.length; i += 10) {
+            if (runId !== _gSearchRunId) return;
+            const batch = await Promise.all(pagesRepos.slice(i, i + 10).map(async r => {
+              const pg = await hasGitHubPages(r.owner.login, r.name);
+              return pg ? buildEntry(r, pg, org.login) : null;
+            }));
+            batch.filter(Boolean).forEach(e => pages.push(e));
+          }
+          // Cache for sidebar use
+          state.orgCache[org.login] = { pages, ts: Date.now() };
+          saveOrgCache();
+        }
+
+        if (runId !== _gSearchRunId) return;
+
+        // Add newly discovered pages that match the current query
+        let added = false;
+        pages.forEach(p => {
+          if (!seenIds.has(p.id) && fuzzyScore(p, q.toLowerCase()) > 0) {
+            seenIds.add(p.id);
+            state.allPages.push(p);
+            added = true;
+          }
+        });
+        if (added) applyFilters();
+      } catch(e) {
+        if (e.message === '401 Unauthorised') return;
+      }
+
+      scanned++;
+      if (runId !== _gSearchRunId) return;
+      _updateSearchProgress(`${state.filtered.length} results · scanning ${scanned} / ${total} orgs…`);
+    }
+  }
+
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  if (runId !== _gSearchRunId) return;
+  _updateSearchProgress(`${state.filtered.length} result${state.filtered.length !== 1 ? 's' : ''} across ${total} orgs`);
+}
+
+function _updateSearchProgress(msg) {
+  const el = document.getElementById('resultsCount');
+  if (!el) return;
+  if (msg) {
+    el.innerHTML = `<span style="display:inline-flex;align-items:center;gap:5px">${
+      msg.includes('scanning') ? `<span style="display:inline-block;width:10px;height:10px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;flex-shrink:0"></span>` : ''
+    }${escHtml(msg)}</span>`;
+  }
+}
+
+
   state.search = document.getElementById('searchInput').value.toLowerCase();
   state.sort = document.getElementById('sortSelect')?.value || 'name';
 
@@ -2014,12 +2140,10 @@ function applyFilters() {
   if (state.filters.starred) list = list.filter(p => state.starred[p.fullName]);
 
   if (state.search) {
+    const q = state.search;
     list = list.filter(p =>
-      p.name.toLowerCase().includes(state.search) ||
-      p.org.toLowerCase().includes(state.search) ||
-      p.description.toLowerCase().includes(state.search) ||
-      (state.tags[p.fullName] || []).some(t => t.toLowerCase().includes(state.search)) ||
-      p.pagesUrl.toLowerCase().includes(state.search)
+      fuzzyScore(p, q) > 0 ||
+      p.pagesUrl.toLowerCase().includes(q)
     );
   }
 
@@ -3017,7 +3141,7 @@ async function init() {
   let searchTimer;
   searchInput.addEventListener('input', () => {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(applyFilters, 200);
+    searchTimer = setTimeout(onHeaderSearchInput, 200);
   });
 
   if (state.allPages.length || state.manualPages.length) {
