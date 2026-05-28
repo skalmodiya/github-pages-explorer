@@ -1040,14 +1040,14 @@
 
     <div class="form-group">
       <label class="form-label">GitHub Enterprise Instance</label>
-      <div style="padding:9px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text-muted)">${OAUTH_CONFIG.ghBaseUrl}</div>
+      <div style="padding:9px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text-muted)">${GH_BASE}</div>
     </div>
 
     <div class="form-group">
       <label class="form-label">Authentication</label>
       <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="var(--badge-text)" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        <span style="color:var(--badge-text);font-weight:500">Signed in via GitHub OAuth</span>
+        <span style="color:var(--badge-text);font-weight:500">Connected via Personal Access Token</span>
         <button class="btn" onclick="logout();closeSettings()" style="margin-left:auto;padding:4px 10px;font-size:12px">Sign out</button>
       </div>
     </div>
@@ -1161,149 +1161,60 @@
 <div class="toast-container" id="toastContainer"></div>
 
 <script>
-// ── OAuth Config ──────────────────────────────────────────────────────────────
-const OAUTH_CONFIG = {
-  ghBaseUrl: 'https://github.tools.sap',
-  clientId:  'b3f5861c39e3c96a65b6',
-  scope:     'read:org repo',
-};
+// ── Constants ─────────────────────────────────────────────────────────────────
+const GH_BASE = 'https://github.tools.sap';
 
-// ── Device Flow ───────────────────────────────────────────────────────────────
-let _devicePollTimer = null;
-
-async function startOAuthLogin() {
-  showDeviceFlow('loading');
-
-  try {
-    const res = await fetch(`${OAUTH_CONFIG.ghBaseUrl}/login/device/code`, {
-      method: 'POST',
-      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: OAUTH_CONFIG.clientId, scope: OAUTH_CONFIG.scope }),
-    });
-    const data = await res.json();
-
-    if (!data.device_code) {
-      showLoginScreen(`Failed to start login: ${data.error_description || data.error || 'Unknown error'}.<br><br>Make sure <strong>Device Flow</strong> is enabled on the OAuth App in github.tools.sap settings.`);
-      return;
-    }
-
-    showDeviceFlow('waiting', data);
-    pollForToken(data.device_code, data.interval || 5);
-  } catch(e) {
-    showLoginScreen(`Device flow request failed: ${e.message}`);
-  }
-}
-
-function pollForToken(deviceCode, interval) {
-  clearTimeout(_devicePollTimer);
-  _devicePollTimer = setTimeout(async () => {
-    try {
-      const res = await fetch(`${OAUTH_CONFIG.ghBaseUrl}/login/oauth/access_token`, {
-        method: 'POST',
-        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id:   OAUTH_CONFIG.clientId,
-          device_code: deviceCode,
-          grant_type:  'urn:ietf:params:oauth:grant-type:device_code',
-        }),
-      });
-      const data = await res.json();
-
-      if (data.access_token) {
-        clearTimeout(_devicePollTimer);
-        localStorage.setItem('ghpe_oauth_token', data.access_token);
-        state.settings.ghToken   = data.access_token;
-        state.settings.ghBaseUrl = OAUTH_CONFIG.ghBaseUrl;
-        // Reload cleanly so the full app initialises
-        window.location.reload();
-      } else if (data.error === 'authorization_pending' || data.error === 'slow_down') {
-        const nextInterval = data.error === 'slow_down' ? interval + 5 : interval;
-        pollForToken(deviceCode, nextInterval);
-      } else if (data.error === 'expired_token') {
-        showLoginScreen('The login code expired. Please try again.');
-      } else {
-        showLoginScreen(`Auth error: ${data.error_description || data.error}`);
-      }
-    } catch(e) {
-      // Network hiccup — retry
-      pollForToken(deviceCode, interval);
-    }
-  }, interval * 1000);
-}
-
-function handleOAuthCallback() { return false; } // Device flow has no callback
-
+// ── Auth ──────────────────────────────────────────────────────────────────────
 function logout() {
-  localStorage.removeItem('ghpe_oauth_token');
+  localStorage.removeItem('ghpe_token');
   localStorage.removeItem('ghpe_cache');
   state.settings.ghToken = '';
   showLoginScreen();
 }
 
-function showLoginScreen(errorMsg = '') {
-  clearTimeout(_devicePollTimer);
-  document.body.innerHTML = `
-    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);font-family:var(--font)">
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:48px 40px;max-width:420px;width:100%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.12)">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="var(--text)" style="margin-bottom:16px"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-        <h1 style="font-size:22px;font-weight:700;margin-bottom:8px;color:var(--text)">SAP Pages Explorer</h1>
-        <p style="color:var(--text-muted);font-size:14px;margin-bottom:32px;line-height:1.6">Discover and browse all GitHub Pages sites across your GitHub Enterprise instance.</p>
-        ${errorMsg ? `<div style="background:var(--error-bg);color:var(--error);border:1px solid var(--error);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:20px;text-align:left">${errorMsg}</div>` : ''}
-        <button onclick="startOAuthLogin()" style="width:100%;padding:12px 20px;background:#238636;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;transition:background 0.2s" onmouseover="this.style.background='#2ea043'" onmouseout="this.style.background='#238636'">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-          Sign in with github.tools.sap
-        </button>
-        <p style="margin-top:20px;font-size:11px;color:var(--text-muted)">Signs in via <strong>github.tools.sap</strong> · No password stored</p>
-      </div>
-    </div>`;
-}
-
-function showDeviceFlow(stage, data = {}) {
-  if (stage === 'loading') {
-    document.body.innerHTML = `
-      <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);font-family:var(--font)">
-        <div style="text-align:center;color:var(--text-muted)">
-          <div style="width:36px;height:36px;border:3px solid var(--border);border-top-color:#0969da;border-radius:50%;animation:spin 0.7s linear infinite;margin:0 auto 16px"></div>
-          <p style="font-size:14px">Starting sign-in…</p>
-        </div>
-      </div>
-      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>`;
+function submitToken() {
+  const token = document.getElementById('patInput').value.trim();
+  if (!token) {
+    document.getElementById('patError').textContent = 'Please enter a token.';
     return;
   }
+  localStorage.setItem('ghpe_token', token);
+  window.location.reload();
+}
 
-  // stage === 'waiting'
-  const { user_code, verification_uri } = data;
+function showLoginScreen(errorMsg = '') {
   document.body.innerHTML = `
     <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);font-family:var(--font)">
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:48px 40px;max-width:460px;width:100%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.12)">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="var(--text)" style="margin-bottom:16px"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-        <h1 style="font-size:20px;font-weight:700;margin-bottom:8px;color:var(--text)">Authorise SAP Pages Explorer</h1>
-        <p style="color:var(--text-muted);font-size:13px;margin-bottom:28px;line-height:1.6">
-          A browser tab will open. Enter the code below when prompted.
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:48px 40px;max-width:440px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,0.12)">
+        <div style="text-align:center;margin-bottom:28px">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="var(--text)" style="margin-bottom:14px"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          <h1 style="font-size:22px;font-weight:700;margin-bottom:6px;color:var(--text)">SAP Pages Explorer</h1>
+          <p style="color:var(--text-muted);font-size:14px;line-height:1.6">Discover all GitHub Pages sites on <strong>github.tools.sap</strong>.</p>
+        </div>
+        ${errorMsg ? `<div style="background:var(--error-bg);color:var(--error);border:1px solid var(--error);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:16px">${errorMsg}</div>` : ''}
+        <label style="display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px">
+          Personal Access Token
+          <a href="${GH_BASE}/settings/tokens/new?scopes=read%3Aorg%2Crepo&description=SAP+Pages+Explorer" target="_blank" rel="noopener"
+            style="font-weight:400;color:var(--accent);text-decoration:none;margin-left:6px;font-size:12px">
+            Create one ↗
+          </a>
+        </label>
+        <input id="patInput" type="password" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+          style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:14px;outline:none;margin-bottom:6px;box-sizing:border-box"
+          onkeydown="if(event.key==='Enter')submitToken()"
+          onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'" />
+        <div id="patError" style="color:var(--error);font-size:12px;min-height:18px;margin-bottom:10px"></div>
+        <button onclick="submitToken()"
+          style="width:100%;padding:11px 20px;background:var(--accent);color:var(--accent-text);border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;transition:background 0.2s"
+          onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+          Connect
+        </button>
+        <p style="margin-top:18px;font-size:11px;color:var(--text-muted);line-height:1.6;text-align:center">
+          Token is stored only in your browser's <code style="background:var(--surface2);padding:1px 4px;border-radius:3px">localStorage</code> — never sent anywhere else.<br>
+          Required scopes: <code style="background:var(--surface2);padding:1px 4px;border-radius:3px">read:org</code> and <code style="background:var(--surface2);padding:1px 4px;border-radius:3px">repo</code>
         </p>
-
-        <div style="background:var(--surface2);border:2px dashed var(--border);border-radius:12px;padding:20px;margin-bottom:24px">
-          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:8px">Your one-time code</div>
-          <div id="deviceCode" style="font-size:32px;font-weight:800;letter-spacing:0.15em;color:var(--accent);font-family:monospace;cursor:pointer" title="Click to copy" onclick="navigator.clipboard.writeText('${user_code}');this.style.color='green';setTimeout(()=>this.style.color='',1000)">${user_code}</div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Click code to copy</div>
-        </div>
-
-        <a href="${verification_uri}" target="_blank" rel="noopener"
-          style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:12px 20px;background:#238636;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none;box-sizing:border-box"
-          onmouseover="this.style.background='#2ea043'" onmouseout="this.style.background='#238636'">
-          Open github.tools.sap to authorise
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-        </a>
-
-        <div style="margin-top:20px;display:flex;align-items:center;gap:8px;justify-content:center;color:var(--text-muted);font-size:12px">
-          <div style="width:12px;height:12px;border:2px solid var(--border);border-top-color:#0969da;border-radius:50%;animation:spin 0.7s linear infinite;flex-shrink:0"></div>
-          Waiting for authorisation…
-        </div>
-
-        <button onclick="showLoginScreen()" style="margin-top:16px;background:none;border:none;color:var(--text-muted);font-size:12px;cursor:pointer;text-decoration:underline">Cancel</button>
       </div>
-    </div>
-    <style>@keyframes spin{to{transform:rotate(360deg)}}</style>`;
+    </div>`;
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -1348,11 +1259,10 @@ function loadState() {
         state.allPages = parsed.data;
       }
     }
-    // OAuth token always overrides any saved token
-    const oauthToken = localStorage.getItem('ghpe_oauth_token');
-    if (oauthToken) {
-      state.settings.ghToken   = oauthToken;
-      state.settings.ghBaseUrl = OAUTH_CONFIG.ghBaseUrl;
+    const token = localStorage.getItem('ghpe_token');
+    if (token) {
+      state.settings.ghToken   = token;
+      state.settings.ghBaseUrl = GH_BASE;
     }
   } catch(e) { console.warn('State load error', e); }
 }
