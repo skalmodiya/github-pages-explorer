@@ -967,15 +967,6 @@
   </div>
 </header>
 
-<!-- CORS warning banner (shown only when opened as file://) -->
-<div id="corsBanner" style="display:none;background:#7c3aed;color:#fff;font-size:13px;padding:10px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-  <strong>⚠️ file:// detected — API calls will be blocked by CORS.</strong>
-  Serve the app over HTTP instead. In your terminal run:
-  <code style="background:rgba(0,0,0,0.25);padding:3px 8px;border-radius:4px;font-size:12px;user-select:all">python -m http.server 8080</code>
-  then open
-  <code style="background:rgba(0,0,0,0.25);padding:3px 8px;border-radius:4px;font-size:12px;user-select:all">http://localhost:8080</code>
-  <button onclick="document.getElementById('corsBanner').style.display='none'" style="margin-left:auto;background:rgba(0,0,0,0.25);border:none;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px">Dismiss</button>
-</div>
 
 <!-- Layout -->
 <div class="layout">
@@ -2429,10 +2420,6 @@ async function init() {
     if (btn) btn.classList.toggle('active', id === state.view);
   });
 
-  // Hide file:// CORS warning when served over HTTPS
-  if (location.protocol === 'file:') {
-    document.getElementById('corsBanner').style.display = 'flex';
-  }
 
   // Search debounce
   const searchInput = document.getElementById('searchInput');
