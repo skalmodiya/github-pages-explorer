@@ -946,7 +946,7 @@
   </div>
 
   <div class="header-actions">
-    <button class="btn" onclick="openSearchAddModal()" title="Search all loaded orgs and bookmark pages">
+    <button class="btn" onclick="openSearchAddModal()" title="Search across all orgs for GitHub Pages and bookmark results">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       Search &amp; Add
     </button>
@@ -1196,7 +1196,7 @@
       <button class="btn-icon btn" onclick="closeSearchAddModal()" title="Close"
         style="font-size:18px;line-height:1;padding:4px 8px;border:none;background:transparent;color:var(--text-muted);cursor:pointer">×</button>
     </div>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;flex-shrink:0">Search across all loaded orgs and bookmark any page to your list.</p>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;flex-shrink:0">Search across all orgs in the domain. Results stream in as each org is scanned.</p>
     <div style="position:relative;flex-shrink:0;margin-bottom:12px">
       <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:0.4;pointer-events:none" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       <input id="searchAddInput" class="form-input" type="text" placeholder="Search by repo name, org, or description…"
@@ -2529,115 +2529,190 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── Manual Pages ─────────────────────────────────────────────────────────────
 // ── Search & Add Modal ────────────────────────────────────────────────────────
+let _saRunId = 0;          // incremented on each new search to cancel previous runs
+let _saMatches = [];       // accumulated matching entries for current run
+let _saOrgsTotal = 0;
+let _saOrgsScanned = 0;
+let _saInputTimer = null;
+
 function openSearchAddModal() {
+  _saRunId++;              // cancel any in-progress scan
+  _saMatches = [];
   document.getElementById('searchAddInput').value = '';
   document.getElementById('searchAddHint').textContent = '';
   document.getElementById('searchAddResults').innerHTML =
-    '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Start typing to search…</div>';
+    '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Start typing to search across all orgs…</div>';
   document.getElementById('searchAddModal').style.display = 'flex';
   setTimeout(() => document.getElementById('searchAddInput').focus(), 50);
 }
 
 function closeSearchAddModal() {
+  _saRunId++;              // cancel any in-progress scan
   document.getElementById('searchAddModal').style.display = 'none';
 }
 
 function fuzzyMatch(str, query) {
-  // Returns a score > 0 if all query chars appear in order in str (case-insensitive).
-  // Higher score = tighter match (contiguous runs score more).
   str = str.toLowerCase(); query = query.toLowerCase();
   let si = 0, qi = 0, score = 0, consecutive = 0;
   while (si < str.length && qi < query.length) {
-    if (str[si] === query[qi]) {
-      consecutive++;
-      score += consecutive;
-      qi++;
-    } else {
-      consecutive = 0;
-    }
+    if (str[si] === query[qi]) { consecutive++; score += consecutive; qi++; }
+    else consecutive = 0;
     si++;
   }
   return qi === query.length ? score : 0;
 }
 
+function fuzzyScore(entry, q) {
+  return Math.max(
+    fuzzyMatch(entry.name, q) * 3,
+    fuzzyMatch(entry.org, q) * 2,
+    fuzzyMatch(entry.description || '', q)
+  );
+}
+
 function onSearchAddInput() {
+  clearTimeout(_saInputTimer);
+  _saInputTimer = setTimeout(_startSearchScan, 300);
+}
+
+async function _startSearchScan() {
   const q = document.getElementById('searchAddInput').value.trim();
   const resultsEl = document.getElementById('searchAddResults');
   const hintEl = document.getElementById('searchAddHint');
 
-  if (!q) {
+  _saRunId++;
+  const runId = _saRunId;
+  _saMatches = [];
+
+  if (q.length < 2) {
     hintEl.textContent = '';
-    resultsEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Start typing to search…</div>';
+    resultsEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Type at least 2 characters to search…</div>';
     return;
   }
 
-  // Search across all cached pages from all orgs
-  const pool = [...state.allPages];
+  // Build org list: all orgs on the instance (paginate /organizations) plus state.orgList
+  // We use state.orgList as the scan queue if available, otherwise fall back to /user/orgs.
+  // For a full-domain search we always scan every org in state.orgList (populated by loadOrgList).
+  const orgs = state.orgList.length
+    ? state.orgList
+    : (await fetchAllPages('/user/orgs').catch(() => []));
+
+  if (runId !== _saRunId) return;
+
+  _saOrgsTotal = orgs.length;
+  _saOrgsScanned = 0;
+
+  hintEl.textContent = `Scanning 0 / ${orgs.length} orgs…`;
+  resultsEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:6px"></span>Scanning…</div>';
+
+  // Scan orgs concurrently (up to 3 at a time) so results stream in fast
+  const CONCURRENCY = 3;
+  let idx = 0;
+
+  async function scanWorker() {
+    while (true) {
+      if (runId !== _saRunId) return;
+      const org = orgs[idx++];
+      if (!org) return;
+
+      try {
+        // Use org cache if available and fresh
+        const cached = state.orgCache[org.login];
+        let pages;
+        if (cached && Date.now() - cached.ts < 30 * 60 * 1000) {
+          pages = cached.pages;
+        } else {
+          const repos = await fetchAllPages(`/orgs/${org.login}/repos`, { type: 'all' }).catch(() => []);
+          if (runId !== _saRunId) return;
+          const pagesRepos = repos.filter(r => r.has_pages && (!r.archived || state.settings.showArchived));
+          pages = [];
+          for (let i = 0; i < pagesRepos.length; i += 10) {
+            if (runId !== _saRunId) return;
+            const batch = await Promise.all(pagesRepos.slice(i, i + 10).map(async r => {
+              const pg = await hasGitHubPages(r.owner.login, r.name);
+              return pg ? buildEntry(r, pg, org.login) : null;
+            }));
+            batch.filter(Boolean).forEach(e => pages.push(e));
+          }
+        }
+
+        if (runId !== _saRunId) return;
+
+        // Fuzzy-match new pages against query
+        pages.forEach(p => {
+          const s = fuzzyScore(p, q);
+          if (s > 0 && !_saMatches.find(m => m.p.id === p.id)) {
+            _saMatches.push({ p, s });
+          }
+        });
+      } catch(_) {}
+
+      _saOrgsScanned++;
+      if (runId !== _saRunId) return;
+      _renderSearchResults(q, runId);
+    }
+  }
+
+  // Launch workers
+  await Promise.all(Array.from({ length: CONCURRENCY }, scanWorker));
+  if (runId !== _saRunId) return;
+  _renderSearchResults(q, runId, true);
+}
+
+function _renderSearchResults(q, runId, done = false) {
+  if (runId !== _saRunId) return;
+  const resultsEl = document.getElementById('searchAddResults');
+  const hintEl = document.getElementById('searchAddHint');
+
+  const sorted = [..._saMatches].sort((a, b) => b.s - a.s).slice(0, 50);
   const alreadyAdded = new Set(state.manualPages.map(m => m.pagesUrl));
 
-  const scored = pool.map(p => {
-    const s = Math.max(
-      fuzzyMatch(p.name, q) * 3,
-      fuzzyMatch(p.org, q) * 2,
-      fuzzyMatch(p.description || '', q)
-    );
-    return { p, s };
-  }).filter(x => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 30);
+  const progress = done
+    ? `${_saMatches.length} result${_saMatches.length !== 1 ? 's' : ''} across ${_saOrgsTotal} orgs`
+    : `${_saMatches.length} result${_saMatches.length !== 1 ? 's' : ''} · scanning ${_saOrgsScanned} / ${_saOrgsTotal} orgs…`;
+  hintEl.textContent = progress;
 
-  if (!scored.length) {
-    hintEl.textContent = '';
-    resultsEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">No matches found.</div>';
+  if (!sorted.length) {
+    resultsEl.innerHTML = `<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">${done ? 'No matches found.' : '<span style="display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:6px"></span>Scanning…'}</div>`;
     return;
   }
 
-  hintEl.textContent = `${scored.length} result${scored.length !== 1 ? 's' : ''}`;
-
-  resultsEl.innerHTML = scored.map(({ p }) => {
+  resultsEl.innerHTML = sorted.map(({ p }) => {
     const added = alreadyAdded.has(p.pagesUrl);
-    return `<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--border);transition:background 0.15s"
-        onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">
+    return `<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--border)">
       ${p.avatarUrl ? `<img src="${escHtml(p.avatarUrl)}" style="width:26px;height:26px;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">` : ''}
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.name)}</div>
         <div style="font-size:11px;color:var(--text-muted)">${escHtml(p.org)}${p.description ? ' · ' + escHtml(p.description.slice(0, 80)) : ''}</div>
       </div>
       <a href="${escHtml(p.pagesUrl)}" target="_blank" rel="noopener"
-        style="font-size:11px;color:var(--accent);text-decoration:none;flex-shrink:0;padding:2px 4px"
-        onclick="event.stopPropagation()" title="Open site">↗</a>
+        style="font-size:11px;color:var(--accent);text-decoration:none;flex-shrink:0;padding:2px 4px" title="Open site">↗</a>
       <button class="btn ${added ? '' : 'btn-primary'}" style="font-size:11px;padding:4px 10px;flex-shrink:0"
-        ${added ? 'disabled title="Already in your list"' : `onclick="searchAddBookmark(${JSON.stringify(p.id)});renderSearchAddResults()"`}>
+        ${added ? 'disabled title="Already in your list"' : `onclick="searchAddBookmark(${JSON.stringify(p.id)},${JSON.stringify(q)})"`}>
         ${added ? '✓ Added' : '+ Add'}
       </button>
     </div>`;
-  }).join('');
+  }).join('') + (!done ? `<div style="padding:10px;text-align:center;color:var(--text-muted);font-size:11px">
+    <span style="display:inline-block;width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:4px"></span>
+    Still scanning…
+  </div>` : '');
 }
 
-function searchAddBookmark(pageId) {
-  const p = state.allPages.find(x => x.id === pageId);
+function searchAddBookmark(pageId, q) {
+  const p = _saMatches.find(x => x.p.id === pageId)?.p || state.allPages.find(x => x.id === pageId);
   if (!p) return;
   if (state.manualPages.some(m => m.pagesUrl === p.pagesUrl)) return;
   state.manualPages.push({
     id: 'manual:' + Date.now(),
-    name: p.name,
-    org: p.org,
-    description: p.description || '',
-    pagesUrl: p.pagesUrl,
-    htmlUrl: p.htmlUrl,
-    updatedAt: p.updatedAt,
-    avatarUrl: p.avatarUrl,
-    archived: p.archived,
-    isPrivate: p.isPrivate,
-    fullName: p.fullName,
-    manual: true,
+    name: p.name, org: p.org, description: p.description || '',
+    pagesUrl: p.pagesUrl, htmlUrl: p.htmlUrl, updatedAt: p.updatedAt,
+    avatarUrl: p.avatarUrl, archived: p.archived, isPrivate: p.isPrivate,
+    fullName: p.fullName, manual: true,
   });
   localStorage.setItem('ghpe_manual', JSON.stringify(state.manualPages));
   renderAll();
   toast(`"${p.name}" added to your list`, 'success');
-}
-
-function renderSearchAddResults() {
-  // Re-render results in place to update button states after adding
-  onSearchAddInput();
+  _renderSearchResults(q, _saRunId, _saOrgsScanned >= _saOrgsTotal);
 }
 
 let _editingManualId = null;
