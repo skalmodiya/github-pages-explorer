@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>SAP Pages Explorer</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%230969da' d='M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z'/></svg>" />
   <style>
@@ -1654,6 +1657,7 @@ function startFetch() { loadOrgList(); }
 async function loadOrgList() {
   if (!state.settings.ghBaseUrl || !state.settings.ghToken) { openSettings(); return; }
 
+  _orgListLoading = true;
   const area = document.getElementById('cardsArea');
   const errArea = document.getElementById('errorArea');
   errArea.innerHTML = '';
@@ -1707,10 +1711,11 @@ async function loadOrgList() {
       }
     }
   } catch(err) {
-    if (err.message === '401 Unauthorised') return;
+    if (err.message === '401 Unauthorised') { _orgListLoading = false; return; }
     area.innerHTML = `<div class="state-box">
       <h3>Error loading organisations</h3><p>${escHtml(err.message)}</p></div>`;
   }
+  _orgListLoading = false;
 }
 
 async function selectOrg(login) {
@@ -2560,6 +2565,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // ── Manual Pages ─────────────────────────────────────────────────────────────
 // ── Search & Add Modal ────────────────────────────────────────────────────────
 let _saRunId = 0;          // incremented on each new search to cancel previous runs
+let _orgListLoading = false; // true while loadOrgList is running
 let _saMatches = [];       // accumulated matching entries for current run
 let _saOrgsTotal = 0;
 let _saOrgsScanned = 0;
@@ -2609,6 +2615,12 @@ async function _startSearchScan() {
   const q = document.getElementById('searchAddInput').value.trim();
   const resultsEl = document.getElementById('searchAddResults');
   const hintEl = document.getElementById('searchAddHint');
+
+  if (_orgListLoading) {
+    hintEl.textContent = 'Waiting for org list to finish loading…';
+    resultsEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Org list is still loading — please wait a moment then search again.</div>';
+    return;
+  }
 
   _saRunId++;
   const runId = _saRunId;
