@@ -1163,91 +1163,75 @@
 <script>
 // ── OAuth Config ──────────────────────────────────────────────────────────────
 const OAUTH_CONFIG = {
-  ghBaseUrl:    'https://github.tools.sap',
-  clientId:     'b3f5861c39e3c96a65b6',
-  redirectUri:  window.location.origin + window.location.pathname,
-  scope:        'read:org repo',
+  ghBaseUrl: 'https://github.tools.sap',
+  clientId:  'b3f5861c39e3c96a65b6',
+  scope:     'read:org repo',
 };
 
-// ── PKCE helpers ──────────────────────────────────────────────────────────────
-function generateRandomString(len = 64) {
-  const arr = crypto.getRandomValues(new Uint8Array(len));
-  return btoa(String.fromCharCode(...arr)).replace(/[+/=]/g, c => ({'+':'-','/':'_','=':''}[c]));
-}
-
-async function sha256Base64url(str) {
-  const data = new TextEncoder().encode(str);
-  const hash = await crypto.subtle.digest('SHA-256', data);
-  return btoa(String.fromCharCode(...new Uint8Array(hash))).replace(/[+/=]/g, c => ({'+':'-','/':'_','=':''}[c]));
-}
+// ── Device Flow ───────────────────────────────────────────────────────────────
+let _devicePollTimer = null;
 
 async function startOAuthLogin() {
-  const verifier = generateRandomString(64);
-  const challenge = await sha256Base64url(verifier);
-  const stateVal = generateRandomString(16);
-  sessionStorage.setItem('oauth_verifier', verifier);
-  sessionStorage.setItem('oauth_state', stateVal);
+  showDeviceFlow('loading');
 
-  const params = new URLSearchParams({
-    client_id:             OAUTH_CONFIG.clientId,
-    redirect_uri:          OAUTH_CONFIG.redirectUri,
-    scope:                 OAUTH_CONFIG.scope,
-    state:                 stateVal,
-    code_challenge:        challenge,
-    code_challenge_method: 'S256',
-  });
-
-  window.location.href = `${OAUTH_CONFIG.ghBaseUrl}/login/oauth/authorize?${params}`;
-}
-
-async function handleOAuthCallback() {
-  const params  = new URLSearchParams(window.location.search);
-  const code    = params.get('code');
-  const retState = params.get('state');
-  if (!code) return false;
-
-  const savedState    = sessionStorage.getItem('oauth_state');
-  const verifier      = sessionStorage.getItem('oauth_verifier');
-  sessionStorage.removeItem('oauth_state');
-  sessionStorage.removeItem('oauth_verifier');
-
-  if (retState !== savedState) {
-    showLoginScreen('OAuth state mismatch — possible CSRF. Please try again.');
-    return true;
-  }
-
-  showOAuthExchanging();
-
-  // Exchange code for token via GHES token endpoint.
-  // GHES supports PKCE natively since 3.x — no client secret needed.
   try {
-    const res = await fetch(`${OAUTH_CONFIG.ghBaseUrl}/login/oauth/access_token`, {
+    const res = await fetch(`${OAUTH_CONFIG.ghBaseUrl}/login/device/code`, {
       method: 'POST',
       headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        client_id:     OAUTH_CONFIG.clientId,
-        code,
-        redirect_uri:  OAUTH_CONFIG.redirectUri,
-        code_verifier: verifier,
-      }),
+      body: JSON.stringify({ client_id: OAUTH_CONFIG.clientId, scope: OAUTH_CONFIG.scope }),
     });
     const data = await res.json();
-    if (data.access_token) {
-      localStorage.setItem('ghpe_oauth_token', data.access_token);
-      state.settings.ghToken    = data.access_token;
-      state.settings.ghBaseUrl  = OAUTH_CONFIG.ghBaseUrl;
-      // Clean code/state from URL without reloading
-      window.history.replaceState({}, '', window.location.pathname);
-      return true;
-    } else {
-      showLoginScreen(`OAuth error: ${data.error_description || data.error || 'Unknown error'}`);
-      return true;
+
+    if (!data.device_code) {
+      showLoginScreen(`Failed to start login: ${data.error_description || data.error || 'Unknown error'}.<br><br>Make sure <strong>Device Flow</strong> is enabled on the OAuth App in github.tools.sap settings.`);
+      return;
     }
+
+    showDeviceFlow('waiting', data);
+    pollForToken(data.device_code, data.interval || 5);
   } catch(e) {
-    showLoginScreen(`OAuth token exchange failed: ${e.message}`);
-    return true;
+    showLoginScreen(`Device flow request failed: ${e.message}`);
   }
 }
+
+function pollForToken(deviceCode, interval) {
+  clearTimeout(_devicePollTimer);
+  _devicePollTimer = setTimeout(async () => {
+    try {
+      const res = await fetch(`${OAUTH_CONFIG.ghBaseUrl}/login/oauth/access_token`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id:   OAUTH_CONFIG.clientId,
+          device_code: deviceCode,
+          grant_type:  'urn:ietf:params:oauth:grant-type:device_code',
+        }),
+      });
+      const data = await res.json();
+
+      if (data.access_token) {
+        clearTimeout(_devicePollTimer);
+        localStorage.setItem('ghpe_oauth_token', data.access_token);
+        state.settings.ghToken   = data.access_token;
+        state.settings.ghBaseUrl = OAUTH_CONFIG.ghBaseUrl;
+        // Reload cleanly so the full app initialises
+        window.location.reload();
+      } else if (data.error === 'authorization_pending' || data.error === 'slow_down') {
+        const nextInterval = data.error === 'slow_down' ? interval + 5 : interval;
+        pollForToken(deviceCode, nextInterval);
+      } else if (data.error === 'expired_token') {
+        showLoginScreen('The login code expired. Please try again.');
+      } else {
+        showLoginScreen(`Auth error: ${data.error_description || data.error}`);
+      }
+    } catch(e) {
+      // Network hiccup — retry
+      pollForToken(deviceCode, interval);
+    }
+  }, interval * 1000);
+}
+
+function handleOAuthCallback() { return false; } // Device flow has no callback
 
 function logout() {
   localStorage.removeItem('ghpe_oauth_token');
@@ -1257,6 +1241,7 @@ function logout() {
 }
 
 function showLoginScreen(errorMsg = '') {
+  clearTimeout(_devicePollTimer);
   document.body.innerHTML = `
     <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);font-family:var(--font)">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:48px 40px;max-width:420px;width:100%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.12)">
@@ -1273,12 +1258,49 @@ function showLoginScreen(errorMsg = '') {
     </div>`;
 }
 
-function showOAuthExchanging() {
+function showDeviceFlow(stage, data = {}) {
+  if (stage === 'loading') {
+    document.body.innerHTML = `
+      <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);font-family:var(--font)">
+        <div style="text-align:center;color:var(--text-muted)">
+          <div style="width:36px;height:36px;border:3px solid var(--border);border-top-color:#0969da;border-radius:50%;animation:spin 0.7s linear infinite;margin:0 auto 16px"></div>
+          <p style="font-size:14px">Starting sign-in…</p>
+        </div>
+      </div>
+      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>`;
+    return;
+  }
+
+  // stage === 'waiting'
+  const { user_code, verification_uri } = data;
   document.body.innerHTML = `
     <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);font-family:var(--font)">
-      <div style="text-align:center;color:var(--text-muted)">
-        <div style="width:36px;height:36px;border:3px solid var(--border);border-top-color:#0969da;border-radius:50%;animation:spin 0.7s linear infinite;margin:0 auto 16px"></div>
-        <p style="font-size:14px">Completing sign-in…</p>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:48px 40px;max-width:460px;width:100%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.12)">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="var(--text)" style="margin-bottom:16px"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        <h1 style="font-size:20px;font-weight:700;margin-bottom:8px;color:var(--text)">Authorise SAP Pages Explorer</h1>
+        <p style="color:var(--text-muted);font-size:13px;margin-bottom:28px;line-height:1.6">
+          A browser tab will open. Enter the code below when prompted.
+        </p>
+
+        <div style="background:var(--surface2);border:2px dashed var(--border);border-radius:12px;padding:20px;margin-bottom:24px">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:8px">Your one-time code</div>
+          <div id="deviceCode" style="font-size:32px;font-weight:800;letter-spacing:0.15em;color:var(--accent);font-family:monospace;cursor:pointer" title="Click to copy" onclick="navigator.clipboard.writeText('${user_code}');this.style.color='green';setTimeout(()=>this.style.color='',1000)">${user_code}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Click code to copy</div>
+        </div>
+
+        <a href="${verification_uri}" target="_blank" rel="noopener"
+          style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:12px 20px;background:#238636;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none;box-sizing:border-box"
+          onmouseover="this.style.background='#2ea043'" onmouseout="this.style.background='#238636'">
+          Open github.tools.sap to authorise
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        </a>
+
+        <div style="margin-top:20px;display:flex;align-items:center;gap:8px;justify-content:center;color:var(--text-muted);font-size:12px">
+          <div style="width:12px;height:12px;border:2px solid var(--border);border-top-color:#0969da;border-radius:50%;animation:spin 0.7s linear infinite;flex-shrink:0"></div>
+          Waiting for authorisation…
+        </div>
+
+        <button onclick="showLoginScreen()" style="margin-top:16px;background:none;border:none;color:var(--text-muted);font-size:12px;cursor:pointer;text-decoration:underline">Cancel</button>
       </div>
     </div>
     <style>@keyframes spin{to{transform:rotate(360deg)}}</style>`;
@@ -2151,18 +2173,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
-  // 1. Handle OAuth callback (?code=...) before anything else
-  if (window.location.search.includes('code=')) {
-    loadState(); // need state.settings initialised
-    applyTheme(state.settings.theme);
-    const handled = await handleOAuthCallback();
-    if (handled && !state.settings.ghToken) return; // login screen shown
-  }
-
   loadState();
   applyTheme(state.settings.theme);
 
-  // 2. If no token at all → show login screen
+  // If no token → show login screen
   if (!state.settings.ghToken) {
     showLoginScreen();
     return;
