@@ -292,15 +292,7 @@
     .view-btn:hover { background: var(--surface2); color: var(--text); }
     .view-btn.active { background: var(--accent); color: var(--accent-text); }
 
-    /* ── Cards grid ──────────────────────────────────────────────────── */
     /* ── Layout containers ───────────────────────────────────────────── */
-    .cards-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-      gap: 16px;
-      align-items: stretch;
-    }
-
     .cards-compact {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -888,7 +880,6 @@
     @media (max-width: 600px) {
       header { padding: 0 12px; gap: 8px; }
       .main { padding: 14px 12px; }
-      .cards-grid { grid-template-columns: 1fr; }
     }
 
     /* ── Starred ─────────────────────────────────────────────────────── */
@@ -1015,8 +1006,8 @@
         </select>
       </div>
       <div class="view-toggle">
-        <button class="view-btn active" id="vbtn-grid" title="Grid (cards)" onclick="setView('grid')">
-          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" fill="currentColor"/><rect x="14" y="3" width="7" height="7" fill="currentColor"/><rect x="3" y="14" width="7" height="7" fill="currentColor"/><rect x="14" y="14" width="7" height="7" fill="currentColor"/></svg>
+        <button class="view-btn" id="vbtn-table" title="Table" onclick="setView('table')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
         </button>
         <button class="view-btn" id="vbtn-compact" title="Compact grid" onclick="setView('compact')">
           <svg viewBox="0 0 24 24"><rect x="2" y="2" width="4" height="4" fill="currentColor"/><rect x="10" y="2" width="4" height="4" fill="currentColor"/><rect x="18" y="2" width="4" height="4" fill="currentColor"/><rect x="2" y="10" width="4" height="4" fill="currentColor"/><rect x="10" y="10" width="4" height="4" fill="currentColor"/><rect x="18" y="10" width="4" height="4" fill="currentColor"/><rect x="2" y="18" width="4" height="4" fill="currentColor"/><rect x="10" y="18" width="4" height="4" fill="currentColor"/><rect x="18" y="18" width="4" height="4" fill="currentColor"/></svg>
@@ -1657,8 +1648,8 @@ function renderCards() {
     return;
   }
 
-  const viewMap = { grid: 'cards-grid', compact: 'cards-compact', list: 'cards-list', table: 'cards-table-wrap' };
-  area.className = viewMap[state.view] || 'cards-grid';
+  const viewMap = { compact: 'cards-compact', list: 'cards-list', table: 'cards-table-wrap' };
+  area.className = viewMap[state.view] || 'cards-table-wrap';
 
   if (state.view === 'table') {
     area.innerHTML = tableHTML();
@@ -1902,7 +1893,7 @@ function toggleStar(fullName) {
 // ── View ──────────────────────────────────────────────────────────────────────
 function setView(v) {
   state.view = v;
-  ['grid','compact','list','table'].forEach(id => {
+  ['table','compact','list'].forEach(id => {
     const btn = document.getElementById('vbtn-' + id);
     if (btn) btn.classList.toggle('active', id === v);
   });
