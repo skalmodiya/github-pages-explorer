@@ -1051,13 +1051,15 @@
       <label class="form-label">Scan mode</label>
       <select class="form-input" id="scanModeSelect" onchange="onScanModeChange()">
         <option value="my-orgs">My orgs only (orgs I belong to)</option>
+        <option value="all-orgs">All orgs on instance</option>
         <option value="pick-orgs">Pick orgs from instance</option>
         <option value="custom">Custom orgs only</option>
       </select>
       <p class="form-hint">
         <strong>My orgs</strong>: fast, only orgs your token has membership in.<br>
-        <strong>Pick orgs</strong>: load the full org list and choose which ones to scan.<br>
-        <strong>Custom</strong>: use the org filter field above, or add orgs via the Org Browser.
+        <strong>All orgs</strong>: streams results from every org — sites appear as they are found.<br>
+        <strong>Pick orgs</strong>: browse and select specific orgs to scan.<br>
+        <strong>Custom</strong>: use the org filter field or Additional orgs below.
       </p>
     </div>
 
@@ -1429,9 +1431,7 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 function openSettings() {
   document.getElementById('ghOrgFilter').value = state.settings.ghOrgFilter;
   document.getElementById('themeSelect').value = state.settings.theme;
-  // migrate legacy 'all-orgs' value
-  const mode = state.settings.scanMode === 'all-orgs' ? 'pick-orgs' : (state.settings.scanMode || 'my-orgs');
-  document.getElementById('scanModeSelect').value = mode;
+  document.getElementById('scanModeSelect').value = state.settings.scanMode || 'my-orgs';
   updateToggleUI('autoRefresh');
   updateToggleUI('showArchived');
   _pendingPinned = [...(state.settings.extraOrgs || [])];
@@ -1560,10 +1560,13 @@ async function fetchAllPages(path, params = {}) {
 async function getAccessibleOrgs() {
   const { scanMode, ghOrgFilter, extraOrgs } = state.settings;
 
-  if (scanMode === 'all-orgs' || scanMode === 'pick-orgs') {
+  if (scanMode === 'all-orgs') {
+    return fetchAllPages('/organizations');
+  }
+
+  if (scanMode === 'pick-orgs') {
     const picked = state.settings.pickedOrgs || [];
     if (picked.length) return picked.map(login => ({ login }));
-    // fallback: if nothing picked yet, just use membership orgs
     return fetchAllPages('/user/orgs');
   }
 
