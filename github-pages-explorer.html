@@ -1192,7 +1192,7 @@
 
     <div class="form-group">
       <label class="form-label">Pages URL <span style="color:var(--error)">*</span></label>
-      <input id="manualUrl" class="form-input" type="url" placeholder="https://pages.github.tools.sap/org/repo" />
+      <input id="manualUrl" class="form-input" type="url" placeholder="https://owner.github.io/repo" />
     </div>
     <div class="form-group">
       <label class="form-label">Name <span style="color:var(--error)">*</span></label>
@@ -1216,7 +1216,9 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const GH_BASE = 'https://github.tools.sap';
+// Supports both github.com and GitHub Enterprise Server.
+// Set GH_BASE to 'https://github.com' for github.com, or your GHES host.
+const GH_BASE = 'https://github.com';
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 function logout() {
@@ -1243,7 +1245,7 @@ function showLoginScreen(errorMsg = '') {
         <div style="text-align:center;margin-bottom:28px">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="var(--text)" style="margin-bottom:14px"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
           <h1 style="font-size:22px;font-weight:700;margin-bottom:6px;color:var(--text)">SAP Pages Explorer</h1>
-          <p style="color:var(--text-muted);font-size:14px;line-height:1.6">Discover all GitHub Pages sites on <strong>github.tools.sap</strong>.</p>
+          <p style="color:var(--text-muted);font-size:14px;line-height:1.6">Discover all GitHub Pages sites on <strong>github.com</strong>.</p>
         </div>
         ${errorMsg ? `<div style="background:var(--error-bg);color:var(--error);border:1px solid var(--error);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:16px">${errorMsg}</div>` : ''}
         <label style="display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px">
@@ -1527,12 +1529,20 @@ function saveTagsForRepo() {
 }
 
 // ── GitHub API ────────────────────────────────────────────────────────────────
+function apiBase(base) {
+  // github.com uses api.github.com; GHES uses <host>/api/v3
+  if (!base) return '';
+  return base.replace(/\/+$/, '') === 'https://github.com'
+    ? 'https://api.github.com'
+    : `${base}/api/v3`;
+}
+
 async function ghFetch(path, params = {}) {
   const base = state.settings.ghBaseUrl;
   const token = state.settings.ghToken;
   if (!base || !token) throw new Error('Missing GitHub URL or token. Click Settings to configure.');
 
-  const url = new URL(`${base}/api/v3${path}`);
+  const url = new URL(`${apiBase(base)}${path}`);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
 
   const res = await fetch(url.toString(), {
@@ -1678,9 +1688,11 @@ async function selectOrg(login) {
     repos = repos.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; });
     if (!state.settings.showArchived) repos = repos.filter(r => !r.archived);
 
+    // Use has_pages flag to skip the /pages API call for the vast majority of repos
+    const pagesRepos = repos.filter(r => r.has_pages);
     const pagesFound = [];
-    for (let i = 0; i < repos.length; i += 20) {
-      const results = await Promise.all(repos.slice(i, i + 20).map(async r => {
+    for (let i = 0; i < pagesRepos.length; i += 10) {
+      const results = await Promise.all(pagesRepos.slice(i, i + 10).map(async r => {
         const pages = await hasGitHubPages(r.owner.login, r.name);
         return pages ? { repo: r, pages } : null;
       }));
@@ -1708,11 +1720,12 @@ async function selectOrg(login) {
 }
 
 function buildPagesUrl(baseUrl, owner, repoName) {
-  // GHES Pages sites are served at https://<pages-host>/<owner>/<repo>
-  // The pages host is typically `pages.<ghes-domain>` but pages.html_url is authoritative.
-  // This fallback constructs a best-guess URL from the GHES hostname.
   try {
-    const host = new URL(baseUrl).hostname; // e.g. github.tools.sap
+    const normalized = baseUrl.replace(/\/+$/, '');
+    if (normalized === 'https://github.com') {
+      return `https://${owner}.github.io/${repoName}`;
+    }
+    const host = new URL(baseUrl).hostname;
     return `https://pages.${host}/${owner}/${repoName}`;
   } catch { return ''; }
 }
