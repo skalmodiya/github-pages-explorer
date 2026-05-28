@@ -1039,15 +1039,17 @@
     <h2>⚙️ Settings</h2>
 
     <div class="form-group">
-      <label class="form-label">GitHub Enterprise URL</label>
-      <input type="url" class="form-input" id="ghBaseUrl" placeholder="https://github.tools.sap" />
-      <p class="form-hint">The base URL of your GitHub Enterprise instance.</p>
+      <label class="form-label">GitHub Enterprise Instance</label>
+      <div style="padding:9px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text-muted)">${OAUTH_CONFIG.ghBaseUrl}</div>
     </div>
 
     <div class="form-group">
-      <label class="form-label">Personal Access Token (PAT)</label>
-      <input type="password" class="form-input" id="ghToken" placeholder="ghp_••••••••••••••••" autocomplete="off" />
-      <p class="form-hint">Needs <strong>read:org</strong>, <strong>repo</strong> (or <strong>public_repo</strong>) scopes. Stored only in your browser's localStorage.</p>
+      <label class="form-label">Authentication</label>
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="var(--badge-text)" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span style="color:var(--badge-text);font-weight:500">Signed in via GitHub OAuth</span>
+        <button class="btn" onclick="logout();closeSettings()" style="margin-left:auto;padding:4px 10px;font-size:12px">Sign out</button>
+      </div>
     </div>
 
     <div class="form-group">
@@ -1159,6 +1161,129 @@
 <div class="toast-container" id="toastContainer"></div>
 
 <script>
+// ── OAuth Config ──────────────────────────────────────────────────────────────
+const OAUTH_CONFIG = {
+  ghBaseUrl:    'https://github.tools.sap',
+  clientId:     'REPLACE_WITH_YOUR_CLIENT_ID',   // ← paste your OAuth App Client ID here
+  redirectUri:  window.location.origin + window.location.pathname,
+  scope:        'read:org repo',
+};
+
+// ── PKCE helpers ──────────────────────────────────────────────────────────────
+function generateRandomString(len = 64) {
+  const arr = crypto.getRandomValues(new Uint8Array(len));
+  return btoa(String.fromCharCode(...arr)).replace(/[+/=]/g, c => ({'+':'-','/':'_','=':''}[c]));
+}
+
+async function sha256Base64url(str) {
+  const data = new TextEncoder().encode(str);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return btoa(String.fromCharCode(...new Uint8Array(hash))).replace(/[+/=]/g, c => ({'+':'-','/':'_','=':''}[c]));
+}
+
+async function startOAuthLogin() {
+  const verifier = generateRandomString(64);
+  const challenge = await sha256Base64url(verifier);
+  const stateVal = generateRandomString(16);
+  sessionStorage.setItem('oauth_verifier', verifier);
+  sessionStorage.setItem('oauth_state', stateVal);
+
+  const params = new URLSearchParams({
+    client_id:             OAUTH_CONFIG.clientId,
+    redirect_uri:          OAUTH_CONFIG.redirectUri,
+    scope:                 OAUTH_CONFIG.scope,
+    state:                 stateVal,
+    code_challenge:        challenge,
+    code_challenge_method: 'S256',
+  });
+
+  window.location.href = `${OAUTH_CONFIG.ghBaseUrl}/login/oauth/authorize?${params}`;
+}
+
+async function handleOAuthCallback() {
+  const params  = new URLSearchParams(window.location.search);
+  const code    = params.get('code');
+  const retState = params.get('state');
+  if (!code) return false;
+
+  const savedState    = sessionStorage.getItem('oauth_state');
+  const verifier      = sessionStorage.getItem('oauth_verifier');
+  sessionStorage.removeItem('oauth_state');
+  sessionStorage.removeItem('oauth_verifier');
+
+  if (retState !== savedState) {
+    showLoginScreen('OAuth state mismatch — possible CSRF. Please try again.');
+    return true;
+  }
+
+  showOAuthExchanging();
+
+  // Exchange code for token via GHES token endpoint.
+  // GHES supports PKCE natively since 3.x — no client secret needed.
+  try {
+    const res = await fetch(`${OAUTH_CONFIG.ghBaseUrl}/login/oauth/access_token`, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id:     OAUTH_CONFIG.clientId,
+        code,
+        redirect_uri:  OAUTH_CONFIG.redirectUri,
+        code_verifier: verifier,
+      }),
+    });
+    const data = await res.json();
+    if (data.access_token) {
+      localStorage.setItem('ghpe_oauth_token', data.access_token);
+      state.settings.ghToken    = data.access_token;
+      state.settings.ghBaseUrl  = OAUTH_CONFIG.ghBaseUrl;
+      // Clean code/state from URL without reloading
+      window.history.replaceState({}, '', window.location.pathname);
+      return true;
+    } else {
+      showLoginScreen(`OAuth error: ${data.error_description || data.error || 'Unknown error'}`);
+      return true;
+    }
+  } catch(e) {
+    showLoginScreen(`OAuth token exchange failed: ${e.message}`);
+    return true;
+  }
+}
+
+function logout() {
+  localStorage.removeItem('ghpe_oauth_token');
+  localStorage.removeItem('ghpe_cache');
+  state.settings.ghToken = '';
+  showLoginScreen();
+}
+
+function showLoginScreen(errorMsg = '') {
+  document.body.innerHTML = `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);font-family:var(--font)">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:48px 40px;max-width:420px;width:100%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.12)">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="var(--text)" style="margin-bottom:16px"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        <h1 style="font-size:22px;font-weight:700;margin-bottom:8px;color:var(--text)">GitHub Pages Explorer</h1>
+        <p style="color:var(--text-muted);font-size:14px;margin-bottom:32px;line-height:1.6">Discover and browse all GitHub Pages sites across your GitHub Enterprise instance.</p>
+        ${errorMsg ? `<div style="background:var(--error-bg);color:var(--error);border:1px solid var(--error);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:20px;text-align:left">${errorMsg}</div>` : ''}
+        <button onclick="startOAuthLogin()" style="width:100%;padding:12px 20px;background:#238636;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;transition:background 0.2s" onmouseover="this.style.background='#2ea043'" onmouseout="this.style.background='#238636'">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          Sign in with GitHub Enterprise
+        </button>
+        <p style="margin-top:20px;font-size:11px;color:var(--text-muted)">Signs in via <strong>github.tools.sap</strong> · No password stored</p>
+      </div>
+    </div>`;
+}
+
+function showOAuthExchanging() {
+  document.body.innerHTML = `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);font-family:var(--font)">
+      <div style="text-align:center;color:var(--text-muted)">
+        <div style="width:36px;height:36px;border:3px solid var(--border);border-top-color:#0969da;border-radius:50%;animation:spin 0.7s linear infinite;margin:0 auto 16px"></div>
+        <p style="font-size:14px">Completing sign-in…</p>
+      </div>
+    </div>
+    <style>@keyframes spin{to{transform:rotate(360deg)}}</style>`;
+}
+
 // ── State ────────────────────────────────────────────────────────────────────
 const state = {
   allPages: [],
@@ -1201,18 +1326,22 @@ function loadState() {
         state.allPages = parsed.data;
       }
     }
+    // OAuth token always overrides any saved token
+    const oauthToken = localStorage.getItem('ghpe_oauth_token');
+    if (oauthToken) {
+      state.settings.ghToken   = oauthToken;
+      state.settings.ghBaseUrl = OAUTH_CONFIG.ghBaseUrl;
+    }
   } catch(e) { console.warn('State load error', e); }
 }
 
 function saveSettings() {
-  state.settings.ghBaseUrl = document.getElementById('ghBaseUrl').value.trim().replace(/\/$/, '');
-  state.settings.ghToken = document.getElementById('ghToken').value.trim();
   state.settings.ghOrgFilter = document.getElementById('ghOrgFilter').value.trim();
   state.settings.scanMode = document.getElementById('scanModeSelect').value;
   localStorage.setItem('ghpe_settings', JSON.stringify(state.settings));
   closeSettings();
   toast('Settings saved', 'success');
-  if (state.settings.ghBaseUrl && state.settings.ghToken) startFetch();
+  startFetch();
 }
 
 function saveCache(data) {
@@ -1262,8 +1391,6 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 
 // ── Settings modal ────────────────────────────────────────────────────────────
 function openSettings() {
-  document.getElementById('ghBaseUrl').value = state.settings.ghBaseUrl;
-  document.getElementById('ghToken').value = state.settings.ghToken;
   document.getElementById('ghOrgFilter').value = state.settings.ghOrgFilter;
   document.getElementById('themeSelect').value = state.settings.theme;
   document.getElementById('scanModeSelect').value = state.settings.scanMode || 'my-orgs';
@@ -2023,9 +2150,36 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-function init() {
+async function init() {
+  // 1. Handle OAuth callback (?code=...) before anything else
+  if (window.location.search.includes('code=')) {
+    loadState(); // need state.settings initialised
+    applyTheme(state.settings.theme);
+    const handled = await handleOAuthCallback();
+    if (handled && !state.settings.ghToken) return; // login screen shown
+  }
+
   loadState();
   applyTheme(state.settings.theme);
+
+  // 2. If no token at all → show login screen
+  if (!state.settings.ghToken) {
+    showLoginScreen();
+    return;
+  }
+
+  // 3. Authenticated — render the app
+  // Add logout button to header
+  const headerActions = document.querySelector('.header-actions');
+  if (headerActions && !document.getElementById('logoutBtn')) {
+    const btn = document.createElement('button');
+    btn.id = 'logoutBtn';
+    btn.className = 'btn';
+    btn.title = 'Sign out';
+    btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg> Sign out`;
+    btn.onclick = logout;
+    headerActions.appendChild(btn);
+  }
 
   // Sync view toggle active state from saved preference
   ['grid','compact','list','table'].forEach(id => {
@@ -2033,7 +2187,7 @@ function init() {
     if (btn) btn.classList.toggle('active', id === state.view);
   });
 
-  // Warn when served as file:// — CORS will block all API calls
+  // Hide file:// CORS warning when served over HTTPS
   if (location.protocol === 'file:') {
     document.getElementById('corsBanner').style.display = 'flex';
   }
@@ -2049,14 +2203,6 @@ function init() {
   if (state.allPages.length) {
     renderAll();
     toast('Loaded from cache — click Refresh to update', '');
-  } else if (!state.settings.ghBaseUrl || !state.settings.ghToken) {
-    document.getElementById('cardsArea').innerHTML = `
-      <div class="state-box">
-        <svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-        <h3>Welcome to GitHub Pages Explorer</h3>
-        <p>Connect your GitHub Enterprise instance to automatically discover all GitHub Pages sites you have access to.</p>
-        <button class="btn btn-primary" onclick="openSettings()" style="margin-top:8px">⚙️ Configure Settings</button>
-      </div>`;
   } else if (state.settings.autoRefresh) {
     startFetch();
   }
