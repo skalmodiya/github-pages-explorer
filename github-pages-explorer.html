@@ -2192,12 +2192,18 @@ function _appendCards() {
 }
 
 function _attachCardsScrollLoader() {
-  const main = document.getElementById('mainArea');
-  if (!main) return;
-  main.onscroll = () => {
+  window.onscroll = () => {
     if (_cardsRendered >= state.filtered.length) return;
-    if (main.scrollTop + main.clientHeight >= main.scrollHeight - 200) _appendCards();
+    if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 200) _appendCards();
   };
+  // also listen on mainArea in case it is the scrolling container
+  const main = document.getElementById('mainArea');
+  if (main) {
+    main.onscroll = () => {
+      if (_cardsRendered >= state.filtered.length) return;
+      if (main.scrollTop + main.clientHeight >= main.scrollHeight - 200) _appendCards();
+    };
+  }
 }
 
 
