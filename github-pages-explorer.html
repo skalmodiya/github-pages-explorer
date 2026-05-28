@@ -1073,15 +1073,18 @@
     </div>
 
     <div class="form-group">
-      <label class="form-label">Pinned orgs <span style="font-weight:400;color:var(--text-muted)">(always included regardless of scan mode)</span></label>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <div id="pinnedOrgsList" style="display:flex;flex-wrap:wrap;gap:5px;flex:1"></div>
-        <button class="btn" type="button" onclick="openOrgBrowser()">
+      <label class="form-label">Additional orgs <span style="font-weight:400;color:var(--text-muted)">(always scanned, any mode)</span></label>
+      <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px" id="pinnedOrgsList"></div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="quickAddOrgInput" class="form-input" type="text" placeholder="org-login" style="flex:1;padding:7px 10px;font-size:13px"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();quickAddOrg();}" />
+        <button class="btn" type="button" onclick="quickAddOrg()" style="flex-shrink:0">Add</button>
+        <button class="btn" type="button" onclick="openOrgBrowser()" style="flex-shrink:0">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          Browse orgs
+          Browse
         </button>
       </div>
-      <p class="form-hint">Click "Browse orgs" to search and pin orgs you are not a member of (e.g. project-piper).</p>
+      <p class="form-hint">Type an org login and press Enter or Add. Use Browse to search. Works with every scan mode — useful for orgs like <em>project-piper</em> you're not a member of.</p>
     </div>
 
     <div class="form-group">
@@ -2070,8 +2073,29 @@ function renderSettingsPinnedChips() {
   if (!el) return;
   const orgs = state.settings.extraOrgs || [];
   el.innerHTML = orgs.length
-    ? orgs.map(login => `<span class="pinned-chip">${escHtml(login)}</span>`).join('')
-    : '<span style="font-size:12px;color:var(--text-muted)">None pinned</span>';
+    ? orgs.map(login =>
+        `<span class="pinned-chip">${escHtml(login)}<span class="pinned-chip-remove" onclick="removeSettingsPinnedOrg('${escHtml(login)}')" title="Remove">×</span></span>`
+      ).join('')
+    : '<span style="font-size:12px;color:var(--text-muted)">None added yet</span>';
+}
+
+function removeSettingsPinnedOrg(login) {
+  state.settings.extraOrgs = (state.settings.extraOrgs || []).filter(o => o !== login);
+  localStorage.setItem('ghpe_settings', JSON.stringify(state.settings));
+  renderSettingsPinnedChips();
+}
+
+function quickAddOrg() {
+  const input = document.getElementById('quickAddOrgInput');
+  const login = input.value.trim().replace(/^@/, '');
+  if (!login) return;
+  if (!(state.settings.extraOrgs || []).includes(login)) {
+    state.settings.extraOrgs = [...(state.settings.extraOrgs || []), login];
+    localStorage.setItem('ghpe_settings', JSON.stringify(state.settings));
+    renderSettingsPinnedChips();
+  }
+  input.value = '';
+  input.focus();
 }
 
 // allow Enter key in org search
