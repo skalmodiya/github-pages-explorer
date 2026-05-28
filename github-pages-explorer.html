@@ -1988,9 +1988,9 @@ async function selectOrg(login) {
   const area = document.getElementById('cardsArea');
   const toolbar = document.getElementById('toolbar');
 
-  // serve from cache if fresh
+  // serve from cache only if scan completed fully (not interrupted mid-way)
   const cached = state.orgCache[login];
-  if (cached && Date.now() - cached.ts < 30 * 60 * 1000) {
+  if (cached && cached.complete && Date.now() - cached.ts < 30 * 60 * 1000) {
     state.allPages = Object.values(state.orgCache).flatMap(e => e.pages);
     state.filters.org = login;
     toolbar.style.display = 'flex';
@@ -2050,7 +2050,7 @@ async function selectOrg(login) {
       repoPage++;
     }
 
-    state.orgCache[login] = { pages: pagesFound, ts: Date.now() };
+    state.orgCache[login] = { pages: pagesFound, ts: Date.now(), complete: true };
     saveOrgCache();
     state.allPages = Object.values(state.orgCache).flatMap(e => e.pages);
     state.filters.org = login;
