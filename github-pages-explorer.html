@@ -1216,9 +1216,16 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-// Supports both github.com and GitHub Enterprise Server.
-// Set GH_BASE to 'https://github.com' for github.com, or your GHES host.
-const GH_BASE = 'https://github.com';
+// Auto-detect the GitHub host from the page's own origin.
+// - github.io  → github.com
+// - pages.<host> → <host>  (GHES pattern)
+// - anything else → github.com (fallback for local dev / unknown)
+const GH_BASE = (() => {
+  const h = location.hostname; // e.g. skalmodiya.github.io or pages.github.tools.sap
+  if (h.endsWith('.github.io') || h === 'github.io') return 'https://github.com';
+  if (h.startsWith('pages.')) return `https://${h.slice('pages.'.length)}`;
+  return 'https://github.com';
+})();
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 function logout() {
