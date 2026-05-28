@@ -985,6 +985,13 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-section">
       <div class="sidebar-label">Orgs / Owners</div>
+      <div style="position:relative;margin-bottom:8px">
+        <svg style="position:absolute;left:7px;top:50%;transform:translateY(-50%);opacity:0.4;pointer-events:none" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="orgSearch" type="text" placeholder="Filter orgs…"
+          style="width:100%;padding:5px 8px 5px 24px;font-size:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2);color:var(--text);outline:none;box-sizing:border-box"
+          oninput="onOrgSearchInput()"
+          onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'" />
+      </div>
       <div id="orgFilters"></div>
     </div>
     <div class="sidebar-section">
@@ -1659,13 +1666,103 @@ async function hasGitHubPages(owner, repo) {
 // startFetch is now just an alias for loadOrgList (called by Refresh button)
 function startFetch() { loadOrgList(); }
 
+// ── Org sidebar search + scroll-lazy rendering ────────────────────────────────
+let _orgSearchQuery = '';
+let _orgRenderedCount = 0;       // how many filtered orgs are currently in the DOM
+const ORG_PAGE_SIZE = 100;
+
+function onOrgSearchInput() {
+  _orgSearchQuery = (document.getElementById('orgSearch')?.value || '').trim().toLowerCase();
+  _orgRenderedCount = 0;
+  renderOrgSidebar(true);
+}
+
+// Returns the filtered+scored org list based on current search query
+function _filteredOrgs() {
+  const q = _orgSearchQuery;
+  if (!q) return state.orgList;
+  return state.orgList
+    .map(o => ({ o, s: fuzzyMatch(o.login, q) }))
+    .filter(x => x.s > 0)
+    .sort((a, b) => b.s - a.s)
+    .map(x => x.o);
+}
+
+// Render (or append) org rows into #orgFilters
+// full=true clears and re-renders from scratch; false appends next page
+function renderOrgSidebar(full = false) {
+  const orgArea = document.getElementById('orgFilters');
+  if (!orgArea) return;
+
+  const filtered = _filteredOrgs();
+  const start = full ? 0 : _orgRenderedCount;
+  const slice = filtered.slice(start, start + ORG_PAGE_SIZE);
+
+  if (full) {
+    // "All loaded" row + fresh org rows
+    let html = `<div class="filter-item${state.selectedOrg === null ? ' active' : ''}" onclick="showAllOrgs()">
+      <span>All loaded</span>
+      <span class="filter-count">${state.allPages.length + state.manualPages.length}</span>
+    </div>`;
+    orgArea.innerHTML = html;
+  }
+
+  // Remove old sentinel before appending
+  document.getElementById('orgSidebarSentinel')?.remove();
+
+  slice.forEach(org => {
+    const cached = state.orgCache[org.login];
+    const loading = state.orgLoading[org.login];
+    const active = state.selectedOrg === org.login;
+    const badge = loading
+      ? `<span style="display:inline-block;width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;flex-shrink:0"></span>`
+      : cached
+        ? `<span class="filter-count">${cached.pages.length}</span>`
+        : `<span style="font-size:10px;color:var(--text-muted);flex-shrink:0">tap</span>`;
+    const row = document.createElement('div');
+    row.className = `filter-item${active ? ' active' : ''}`;
+    row.style.gap = '6px';
+    row.dataset.login = org.login;
+    row.onclick = () => selectOrg(org.login);
+    row.innerHTML = `
+      ${org.avatar_url ? `<img src="${escHtml(org.avatar_url)}" style="width:16px;height:16px;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">` : ''}
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(org.login)}</span>
+      ${badge}`;
+    orgArea.appendChild(row);
+  });
+
+  _orgRenderedCount = full ? slice.length : _orgRenderedCount + slice.length;
+
+  const remaining = filtered.length - _orgRenderedCount;
+  if (remaining > 0) {
+    // Sentinel: "Load more" row that auto-triggers on scroll into view
+    const sentinel = document.createElement('div');
+    sentinel.id = 'orgSidebarSentinel';
+    sentinel.style.cssText = 'padding:6px 10px;font-size:11px;color:var(--text-muted);text-align:center;cursor:pointer';
+    sentinel.textContent = `${remaining} more — scroll or click`;
+    sentinel.onclick = () => renderOrgSidebar(false);
+    orgArea.appendChild(sentinel);
+  } else if (state._allOrgsNextPage && !_orgSearchQuery) {
+    // Still more pages to fetch from API
+    const sentinel = document.createElement('div');
+    sentinel.id = 'orgSidebarSentinel';
+    sentinel.style.cssText = 'padding:6px 10px;font-size:11px;color:var(--text-muted);text-align:center';
+    sentinel.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:4px"></span>Scroll for more`;
+    orgArea.appendChild(sentinel);
+  }
+}
+
 function _attachSidebarScrollLoader() {
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
   sidebar.onscroll = () => {
-    if (state.settings.scanMode !== 'all-orgs') return;
-    if (state._allOrgsLoading || !state._allOrgsNextPage) return;
-    if (sidebar.scrollTop + sidebar.clientHeight >= sidebar.scrollHeight - 80) {
+    if (sidebar.scrollTop + sidebar.clientHeight < sidebar.scrollHeight - 60) return;
+    const filtered = _filteredOrgs();
+    if (_orgRenderedCount < filtered.length) {
+      // Render next page of already-fetched orgs
+      renderOrgSidebar(false);
+    } else if (!_orgSearchQuery && !state._allOrgsLoading && state._allOrgsNextPage) {
+      // Fetch next API page
       _loadMoreAllOrgs();
     }
   };
@@ -1675,50 +1772,26 @@ async function _loadMoreAllOrgs() {
   if (state._allOrgsLoading || !state._allOrgsNextPage) return;
   state._allOrgsLoading = true;
 
-  // Show spinner at bottom of sidebar org list
-  const orgArea = document.getElementById('orgFilters');
-  const spinner = document.createElement('div');
-  spinner.id = 'orgLoadMoreSpinner';
-  spinner.style.cssText = 'padding:8px 10px;font-size:12px;color:var(--text-muted);text-align:center';
-  spinner.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:4px"></span>Loading more…`;
-  orgArea.appendChild(spinner);
-
   try {
     const { data, linkHeader } = await ghFetch('/organizations', { per_page: 100, page: state._allOrgsNextPage });
     state.orgList.push(...data);
     state._allOrgsNextPage = linkHeader.includes('rel="next"') ? state._allOrgsNextPage + 1 : null;
-    spinner.remove();
-    // Append only new rows instead of full re-render
-    const picked = new Set();
-    data.forEach(org => {
-      const cached = state.orgCache[org.login];
-      const count = cached ? cached.pages.length : '';
-      const badge = cached
-        ? `<span class="filter-count">${count}</span>`
-        : `<span style="font-size:10px;color:var(--text-muted);flex-shrink:0">tap</span>`;
-      const row = document.createElement('div');
-      row.className = 'filter-item';
-      row.style.gap = '6px';
-      row.onclick = () => selectOrg(org.login);
-      row.innerHTML = `
-        ${org.avatar_url ? `<img src="${escHtml(org.avatar_url)}" style="width:16px;height:16px;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">` : ''}
-        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(org.login)}</span>
-        ${badge}`;
-      orgArea.appendChild(row);
-    });
+    // Append new rows (they're past the current rendered count so just render next page)
+    renderOrgSidebar(false);
     if (!state._allOrgsNextPage) {
+      document.getElementById('orgSidebarSentinel')?.remove();
       const done = document.createElement('div');
       done.style.cssText = 'padding:6px 10px;font-size:11px;color:var(--text-muted);text-align:center';
       done.textContent = `All ${state.orgList.length} orgs loaded`;
-      orgArea.appendChild(done);
+      document.getElementById('orgFilters')?.appendChild(done);
     }
   } catch(e) {
-    spinner.remove();
     if (e.message !== '401 Unauthorised') {
+      const orgArea = document.getElementById('orgFilters');
       const err = document.createElement('div');
       err.style.cssText = 'padding:6px 10px;font-size:12px;color:var(--error)';
       err.textContent = 'Failed to load more orgs';
-      orgArea.appendChild(err);
+      orgArea?.appendChild(err);
     }
   }
   state._allOrgsLoading = false;
@@ -2115,7 +2188,7 @@ function makeAvatarFallback(org) {
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 function renderSidebar() {
-  // tag counts from all cached + manual pages
+  // tag/star counts
   const tagCounts = {};
   let starCount = 0;
   [...state.allPages, ...state.manualPages].forEach(p => {
@@ -2123,36 +2196,9 @@ function renderSidebar() {
     (state.tags[p.fullName] || []).forEach(t => { tagCounts[t] = (tagCounts[t] || 0) + 1; });
   });
 
-  const orgArea = document.getElementById('orgFilters');
-  const totalCached = state.allPages.length + state.manualPages.length;
-  const allActive = state.selectedOrg === null;
-
-  let html = `<div class="filter-item${allActive ? ' active' : ''}" onclick="showAllOrgs()">
-    <span>All loaded</span>
-    <span class="filter-count">${totalCached}</span>
-  </div>`;
-
-  const orgs = state.orgList.length ? state.orgList : Object.keys(state.orgCache).map(login => ({ login }));
-  orgs.forEach(org => {
-    const login = org.login;
-    const cached = state.orgCache[login];
-    const loading = state.orgLoading[login];
-    const active = state.selectedOrg === login;
-    const count = cached ? cached.pages.length : '';
-    const badge = loading
-      ? `<span style="display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;flex-shrink:0"></span>`
-      : cached
-        ? `<span class="filter-count">${count}</span>`
-        : `<span style="font-size:10px;color:var(--text-muted);flex-shrink:0">tap</span>`;
-
-    html += `<div class="filter-item${active ? ' active' : ''}" onclick="selectOrg('${escHtml(login)}')" style="gap:6px">
-      ${org.avatar_url ? `<img src="${escHtml(org.avatar_url)}" style="width:16px;height:16px;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">` : ''}
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(login)}</span>
-      ${badge}
-    </div>`;
-  });
-
-  orgArea.innerHTML = html;
+  // Org section — delegate to renderOrgSidebar (handles search + lazy rendering)
+  _orgRenderedCount = 0;
+  renderOrgSidebar(true);
 
   const tagArea = document.getElementById('tagFilters');
   const tagEntries = Object.entries(tagCounts).sort((a,b) => a[0].localeCompare(b[0]));
