@@ -1336,6 +1336,8 @@ const state = {
   orgCache: {},       // login → {pages:[], ts} fetched pages per org
   orgLoading: {},     // login → true while fetching
   selectedOrg: null,  // currently selected org login (null = all)
+  _allOrgsNextPage: null, // next API page to fetch in all-orgs scroll mode
+  _allOrgsLoading: false,
 };
 
 // ── Persistence ──────────────────────────────────────────────────────────────
@@ -1654,6 +1656,71 @@ async function hasGitHubPages(owner, repo) {
 // startFetch is now just an alias for loadOrgList (called by Refresh button)
 function startFetch() { loadOrgList(); }
 
+function _attachSidebarScrollLoader() {
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  sidebar.onscroll = () => {
+    if (state.settings.scanMode !== 'all-orgs') return;
+    if (state._allOrgsLoading || !state._allOrgsNextPage) return;
+    if (sidebar.scrollTop + sidebar.clientHeight >= sidebar.scrollHeight - 80) {
+      _loadMoreAllOrgs();
+    }
+  };
+}
+
+async function _loadMoreAllOrgs() {
+  if (state._allOrgsLoading || !state._allOrgsNextPage) return;
+  state._allOrgsLoading = true;
+
+  // Show spinner at bottom of sidebar org list
+  const orgArea = document.getElementById('orgFilters');
+  const spinner = document.createElement('div');
+  spinner.id = 'orgLoadMoreSpinner';
+  spinner.style.cssText = 'padding:8px 10px;font-size:12px;color:var(--text-muted);text-align:center';
+  spinner.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:4px"></span>Loading more…`;
+  orgArea.appendChild(spinner);
+
+  try {
+    const { data, linkHeader } = await ghFetch('/organizations', { per_page: 100, page: state._allOrgsNextPage });
+    state.orgList.push(...data);
+    state._allOrgsNextPage = linkHeader.includes('rel="next"') ? state._allOrgsNextPage + 1 : null;
+    spinner.remove();
+    // Append only new rows instead of full re-render
+    const picked = new Set();
+    data.forEach(org => {
+      const cached = state.orgCache[org.login];
+      const count = cached ? cached.pages.length : '';
+      const badge = cached
+        ? `<span class="filter-count">${count}</span>`
+        : `<span style="font-size:10px;color:var(--text-muted);flex-shrink:0">tap</span>`;
+      const row = document.createElement('div');
+      row.className = 'filter-item';
+      row.style.gap = '6px';
+      row.onclick = () => selectOrg(org.login);
+      row.innerHTML = `
+        ${org.avatar_url ? `<img src="${escHtml(org.avatar_url)}" style="width:16px;height:16px;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">` : ''}
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(org.login)}</span>
+        ${badge}`;
+      orgArea.appendChild(row);
+    });
+    if (!state._allOrgsNextPage) {
+      const done = document.createElement('div');
+      done.style.cssText = 'padding:6px 10px;font-size:11px;color:var(--text-muted);text-align:center';
+      done.textContent = `All ${state.orgList.length} orgs loaded`;
+      orgArea.appendChild(done);
+    }
+  } catch(e) {
+    spinner.remove();
+    if (e.message !== '401 Unauthorised') {
+      const err = document.createElement('div');
+      err.style.cssText = 'padding:6px 10px;font-size:12px;color:var(--error)';
+      err.textContent = 'Failed to load more orgs';
+      orgArea.appendChild(err);
+    }
+  }
+  state._allOrgsLoading = false;
+}
+
 async function loadOrgList() {
   if (!state.settings.ghBaseUrl || !state.settings.ghToken) { openSettings(); return; }
 
@@ -1671,33 +1738,18 @@ async function loadOrgList() {
 
   try {
     if (state.settings.scanMode === 'all-orgs') {
-      // Stream page-by-page; show a counter while loading to avoid re-rendering
-      // thousands of sidebar items on every page (O(n²) DOM thrash)
-      const orgArea = document.getElementById('orgFilters');
-      let page = 1;
-      while (true) {
-        const { data, linkHeader } = await ghFetch('/organizations', { per_page: 100, page });
-        state.orgList.push(...data);
+      // Fetch first page immediately, then load more on sidebar scroll
+      const { data, linkHeader } = await ghFetch('/organizations', { per_page: 100, page: 1 });
+      state.orgList = data;
+      state._allOrgsNextPage = linkHeader.includes('rel="next"') ? 2 : null;
+      state._allOrgsLoading = false;
 
-        if (page === 1) {
-          area.innerHTML = '';
-          document.getElementById('toolbar').style.display = 'flex';
-          state.allPages = Object.values(state.orgCache).flatMap(e => e.pages);
-          renderAll();
-        }
-
-        // Lightweight counter update instead of full sidebar re-render
-        const hasMore = linkHeader.includes('rel="next"');
-        orgArea.innerHTML = `<div style="padding:6px 10px;font-size:12px;color:var(--text-muted)">
-          <span style="display:inline-block;width:10px;height:10px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:5px"></span>
-          Loading orgs… ${state.orgList.length}${hasMore ? '+' : ''}
-        </div>`;
-
-        if (!hasMore) break;
-        page++;
-      }
-      // Full render only once when complete
+      area.innerHTML = '';
+      document.getElementById('toolbar').style.display = 'flex';
+      state.allPages = Object.values(state.orgCache).flatMap(e => e.pages);
+      renderAll();
       renderSidebar();
+      _attachSidebarScrollLoader();
     } else {
       const orgs = await getAccessibleOrgs();
       state.orgList = orgs;
