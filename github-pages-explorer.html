@@ -247,7 +247,8 @@
     .main {
       flex: 1;
       padding: 20px 24px;
-      overflow: hidden;
+      overflow-y: auto;
+      height: calc(100vh - 60px);
     }
 
     .toolbar {
@@ -2103,6 +2104,9 @@ function setProgress(pct, text) {
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
+const CARDS_PAGE = 20;
+let _cardsRendered = 0;
+
 function renderAll() {
   applyFilters();
   renderSidebar();
@@ -2142,6 +2146,7 @@ function applyFilters() {
   document.getElementById('resultsCount').textContent =
     `${list.length} of ${total} site${total !== 1 ? 's' : ''}`;
 
+  _cardsRendered = 0;
   renderCards();
 }
 
@@ -2154,18 +2159,47 @@ function renderCards() {
       <h3>No results found</h3>
       <p>Try adjusting your search or filter.</p>
     </div>`;
+    _cardsRendered = 0;
     return;
   }
 
   const viewMap = { compact: 'cards-compact', list: 'cards-list', table: 'cards-table-wrap' };
   area.className = viewMap[state.view] || 'cards-table-wrap';
 
+  const slice = state.filtered.slice(0, CARDS_PAGE);
+  _cardsRendered = slice.length;
+
   if (state.view === 'table') {
-    area.innerHTML = tableHTML();
+    area.innerHTML = tableHTML(slice);
   } else {
-    area.innerHTML = state.filtered.map(p => cardHTML(p)).join('');
+    area.innerHTML = slice.map(p => cardHTML(p)).join('');
   }
+  _attachCardsScrollLoader();
 }
+
+function _appendCards() {
+  if (_cardsRendered >= state.filtered.length) return;
+  const slice = state.filtered.slice(_cardsRendered, _cardsRendered + CARDS_PAGE);
+  const area = document.getElementById('cardsArea');
+
+  if (state.view === 'table') {
+    const tbody = area.querySelector('tbody');
+    if (tbody) slice.forEach(p => { tbody.insertAdjacentHTML('beforeend', tableRowHTML(p)); });
+  } else {
+    slice.forEach(p => area.insertAdjacentHTML('beforeend', cardHTML(p)));
+  }
+  _cardsRendered += slice.length;
+}
+
+function _attachCardsScrollLoader() {
+  const main = document.getElementById('mainArea');
+  if (!main) return;
+  main.onscroll = () => {
+    if (_cardsRendered >= state.filtered.length) return;
+    if (main.scrollTop + main.clientHeight >= main.scrollHeight - 200) _appendCards();
+  };
+}
+
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 function avatarEl(p) {
@@ -2293,29 +2327,24 @@ function cardHTML(p) {
 }
 
 // ── Table view ────────────────────────────────────────────────────────────────
-function tableHTML() {
-  const rows = state.filtered.map(p => {
-    const isStarred = !!state.starred[p.fullName];
-    const updated = p.updatedAt ? relativeTime(p.updatedAt) : '—';
-    const tags = state.tags[p.fullName] || [];
-    const tagsStr = tags.map(t => `<span class="tag" onclick="filterByTag('${escHtml(t)}')">${escHtml(t)}</span>`).join('');
-    return `<tr class="${isStarred ? 'starred-row' : ''}">
-      <td>
-        <a class="table-name" href="${escHtml(p.pagesUrl)}" target="_blank" rel="noopener">${escHtml(p.name)}</a>
-      </td>
-      <td>
-        <div class="table-org">
-          ${avatarEl(p)}
-          <span>${escHtml(p.org)}</span>
-        </div>
-      </td>
-      <td style="max-width:280px;color:var(--text-muted);font-size:12px">${escHtml(p.description || '—')}</td>
-      <td><div class="table-tags">${tagsStr || '<span style="color:var(--text-muted);font-size:11px">—</span>'}</div></td>
-      <td style="color:var(--text-muted);font-size:12px;white-space:nowrap">${escHtml(updated)}</td>
-      <td>${archiveBadgeEl(p)}</td>
-      <td><div class="table-actions">${actionsEl(p, isStarred)}</div></td>
-    </tr>`;
-  }).join('');
+function tableRowHTML(p) {
+  const isStarred = !!state.starred[p.fullName];
+  const updated = p.updatedAt ? relativeTime(p.updatedAt) : '—';
+  const tags = state.tags[p.fullName] || [];
+  const tagsStr = tags.map(t => `<span class="tag" onclick="filterByTag('${escHtml(t)}')">${escHtml(t)}</span>`).join('');
+  return `<tr class="${isStarred ? 'starred-row' : ''}">
+    <td><a class="table-name" href="${escHtml(p.pagesUrl)}" target="_blank" rel="noopener">${escHtml(p.name)}</a></td>
+    <td><div class="table-org">${avatarEl(p)}<span>${escHtml(p.org)}</span></div></td>
+    <td style="max-width:280px;color:var(--text-muted);font-size:12px">${escHtml(p.description || '—')}</td>
+    <td><div class="table-tags">${tagsStr || '<span style="color:var(--text-muted);font-size:11px">—</span>'}</div></td>
+    <td style="color:var(--text-muted);font-size:12px;white-space:nowrap">${escHtml(updated)}</td>
+    <td>${archiveBadgeEl(p)}</td>
+    <td><div class="table-actions">${actionsEl(p, isStarred)}</div></td>
+  </tr>`;
+}
+
+function tableHTML(slice) {
+  const rows = (slice || state.filtered).map(tableRowHTML).join('');
 
   return `<table class="cards-table">
     <thead>
