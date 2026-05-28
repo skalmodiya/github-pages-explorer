@@ -1314,10 +1314,9 @@ function loadState() {
     const sv = localStorage.getItem('ghpe_view');
     if (sv) state.view = sv;
     const token = localStorage.getItem('ghpe_token');
-    if (token) {
-      state.settings.ghToken   = token;
-      state.settings.ghBaseUrl = GH_BASE;
-    }
+    if (token) state.settings.ghToken = token;
+    // Always use the compiled-in GH_BASE — overrides any stale saved URL
+    state.settings.ghBaseUrl = GH_BASE;
     const manual = localStorage.getItem('ghpe_manual');
     if (manual) state.manualPages = JSON.parse(manual);
     // restore per-org page cache
