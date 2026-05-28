@@ -692,6 +692,36 @@
 
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* ── Org banner ──────────────────────────────────────────────────── */
+    .org-banner {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 20px 24px;
+      margin-bottom: 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .org-banner-avatar {
+      width: 72px;
+      height: 72px;
+      border-radius: 12px;
+      flex-shrink: 0;
+      object-fit: cover;
+      background: var(--surface2);
+    }
+    .org-banner-body { flex: 1; min-width: 0; }
+    .org-banner-name { font-size: 20px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+    .org-banner-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.5; }
+    .org-banner-meta {
+      display: flex; flex-wrap: wrap; gap: 14px;
+      font-size: 12px; color: var(--text-muted);
+    }
+    .org-banner-meta a { color: var(--accent); text-decoration: none; }
+    .org-banner-meta a:hover { text-decoration: underline; }
+    .org-banner-meta span { display: flex; align-items: center; gap: 4px; }
+
     /* ── Progress bar ────────────────────────────────────────────────── */
     .progress-wrap { width: 100%; max-width: 300px; }
     .progress-bar {
@@ -1035,6 +1065,7 @@
         </button>
       </div>
     </div>
+    <div id="orgBanner" style="display:none"></div>
     <div id="cardsArea" class="cards-grid"></div>
   </main>
 </div>
@@ -1894,9 +1925,64 @@ async function loadOrgList() {
   _orgListLoading = false;
 }
 
+async function showOrgBanner(login) {
+  const banner = document.getElementById('orgBanner');
+  if (!banner) return;
+
+  // Show a skeleton immediately using whatever we already know
+  const known = state.orgList.find(o => o.login === login) || {};
+  banner.style.display = '';
+  banner.innerHTML = `<div class="org-banner">
+    ${known.avatar_url ? `<img class="org-banner-avatar" src="${escHtml(known.avatar_url)}" alt="${escHtml(login)}">` : `<div class="org-banner-avatar" style="display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:var(--accent)">${escHtml(login[0].toUpperCase())}</div>`}
+    <div class="org-banner-body">
+      <div class="org-banner-name">${escHtml(login)}</div>
+      <div class="org-banner-desc" style="color:var(--text-muted);font-size:12px">Loading…</div>
+    </div>
+  </div>`;
+
+  try {
+    const { data: org } = await ghFetch(`/orgs/${login}`);
+    banner.innerHTML = `<div class="org-banner">
+      <img class="org-banner-avatar" src="${escHtml(org.avatar_url || '')}" alt="${escHtml(org.login)}" onerror="this.style.display='none'">
+      <div class="org-banner-body">
+        <div class="org-banner-name">${escHtml(org.name || org.login)}</div>
+        ${org.description ? `<div class="org-banner-desc">${escHtml(org.description)}</div>` : ''}
+        <div class="org-banner-meta">
+          ${org.public_members_url || org.followers ? `<span>
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+            ${(org.followers || 0).toLocaleString()} followers
+          </span>` : ''}
+          ${org.location ? `<span>
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            ${escHtml(org.location)}
+          </span>` : ''}
+          ${org.blog ? `<span>
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+            <a href="${escHtml(org.blog.startsWith('http') ? org.blog : 'https://' + org.blog)}" target="_blank" rel="noopener">${escHtml(org.blog)}</a>
+          </span>` : ''}
+          ${org.email ? `<span>
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            <a href="mailto:${escHtml(org.email)}">${escHtml(org.email)}</a>
+          </span>` : ''}
+          <a href="${escHtml(org.html_url)}" target="_blank" rel="noopener" style="margin-left:auto;font-size:12px;color:var(--accent)">View on GitHub ↗</a>
+        </div>
+      </div>
+    </div>`;
+  } catch(e) {
+    if (e.message === '401 Unauthorised') return;
+    // Keep skeleton on error, just remove "Loading…"
+  }
+}
+
+function hideOrgBanner() {
+  const banner = document.getElementById('orgBanner');
+  if (banner) { banner.style.display = 'none'; banner.innerHTML = ''; }
+}
+
 async function selectOrg(login) {
   state.selectedOrg = login;
   renderSidebar();
+  showOrgBanner(login);
 
   const area = document.getElementById('cardsArea');
   const toolbar = document.getElementById('toolbar');
@@ -2264,6 +2350,7 @@ function renderSidebar() {
 function showAllOrgs() {
   state.selectedOrg = null;
   state.filters.org = null;
+  hideOrgBanner();
   state.allPages = Object.values(state.orgCache).flatMap(e => e.pages);
   document.getElementById('toolbar').style.display = 'flex';
   applyFilters();
