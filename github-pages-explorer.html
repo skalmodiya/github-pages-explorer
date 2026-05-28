@@ -2259,6 +2259,8 @@ async function loadNextOrgPage() {
     }
   } catch(e) {
     document.getElementById(spinnerId)?.remove();
+    _orgPickerDone = true; // stop auto-fetch loop on any error
+    if (e.message === '401 Unauthorised') return; // ghFetch already showed login screen
     const errDiv = document.createElement('div');
     errDiv.style.cssText = 'padding:10px;color:var(--error);font-size:13px';
     errDiv.textContent = `Failed: ${e.message}`;
