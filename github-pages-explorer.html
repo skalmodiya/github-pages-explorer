@@ -2092,53 +2092,140 @@ function clearCache() {
 
 // ── Org Picker (pick-orgs mode) ───────────────────────────────────────────────
 let _allOrgPickerItems = [];
+let _orgPickerPage = 0;
+let _orgPickerLoading = false;
+let _orgPickerDone = false;
 
 function onScanModeChange() {
   const mode = document.getElementById('scanModeSelect').value;
   document.getElementById('pickOrgsGroup').style.display = mode === 'pick-orgs' ? '' : 'none';
-  if (mode === 'pick-orgs' && _allOrgPickerItems.length === 0) {
-    // auto-load if we already have a token
-    if (state.settings.ghToken) loadOrgPickerList();
+  if (mode === 'pick-orgs' && _allOrgPickerItems.length === 0 && state.settings.ghToken) {
+    initOrgPicker();
   }
+}
+
+function initOrgPicker() {
+  _allOrgPickerItems = [];
+  _orgPickerPage = 0;
+  _orgPickerLoading = false;
+  _orgPickerDone = false;
+  const listEl = document.getElementById('pickOrgsList');
+  listEl.innerHTML = '';
+  loadNextOrgPage();
+  // attach scroll listener once
+  listEl.onscroll = () => {
+    if (listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 40) {
+      loadNextOrgPage();
+    }
+  };
+}
+
+async function loadNextOrgPage() {
+  if (_orgPickerLoading || _orgPickerDone) return;
+  _orgPickerLoading = true;
+  const listEl = document.getElementById('pickOrgsList');
+  const btn = document.getElementById('loadOrgsBtn');
+
+  // show spinner row
+  const spinnerId = 'orgPickerSpinner';
+  if (!document.getElementById(spinnerId)) {
+    const s = document.createElement('div');
+    s.id = spinnerId;
+    s.style.cssText = 'padding:10px;text-align:center;color:var(--text-muted);font-size:12px';
+    s.textContent = 'Loading…';
+    listEl.appendChild(s);
+  }
+
+  try {
+    _orgPickerPage++;
+    const { data, linkHeader } = await ghFetch('/organizations', { per_page: 100, page: _orgPickerPage });
+    _allOrgPickerItems.push(...data);
+    if (!linkHeader.includes('rel="next"')) _orgPickerDone = true;
+
+    // remove spinner
+    document.getElementById(spinnerId)?.remove();
+
+    // append new rows (respecting current filter)
+    const filter = (document.getElementById('pickOrgsSearch')?.value || '').toLowerCase();
+    const picked = new Set(state.settings.pickedOrgs || []);
+    const toRender = data.filter(o => !filter || o.login.toLowerCase().includes(filter));
+    toRender.forEach(org => listEl.appendChild(makeOrgPickerRow(org, picked)));
+
+    if (_orgPickerDone) {
+      const endMsg = document.createElement('div');
+      endMsg.style.cssText = 'padding:8px;text-align:center;color:var(--text-muted);font-size:11px';
+      endMsg.textContent = `${_allOrgPickerItems.length} orgs loaded`;
+      listEl.appendChild(endMsg);
+      if (btn) { btn.textContent = 'Reload'; btn.disabled = false; }
+    } else {
+      if (btn) { btn.textContent = 'Loading…'; btn.disabled = true; }
+    }
+  } catch(e) {
+    document.getElementById(spinnerId)?.remove();
+    const errDiv = document.createElement('div');
+    errDiv.style.cssText = 'padding:10px;color:var(--error);font-size:13px';
+    errDiv.textContent = `Failed: ${e.message}`;
+    listEl.appendChild(errDiv);
+    if (btn) { btn.textContent = 'Retry'; btn.disabled = false; }
+  }
+  _orgPickerLoading = false;
+
+  // if list isn't scrollable yet and there's more, auto-load next page
+  if (!_orgPickerDone && listEl.scrollHeight <= listEl.clientHeight) {
+    loadNextOrgPage();
+  }
+}
+
+function makeOrgPickerRow(org, picked) {
+  const label = document.createElement('label');
+  label.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:13px';
+  label.onmouseover = () => label.style.background = 'var(--surface)';
+  label.onmouseout  = () => label.style.background = '';
+
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.value = org.login;
+  cb.checked = picked.has(org.login);
+  cb.style.cssText = 'width:15px;height:15px;cursor:pointer;accent-color:var(--accent)';
+  cb.onchange = () => onPickOrgToggle(cb);
+
+  label.appendChild(cb);
+  if (org.avatar_url) {
+    const img = document.createElement('img');
+    img.src = org.avatar_url;
+    img.style.cssText = 'width:20px;height:20px;border-radius:4px;flex-shrink:0';
+    img.onerror = () => img.remove();
+    label.appendChild(img);
+  }
+  const span = document.createElement('span');
+  span.style.color = 'var(--text)';
+  span.textContent = org.login;
+  label.appendChild(span);
+  return label;
 }
 
 async function loadOrgPickerList() {
-  const btn = document.getElementById('loadOrgsBtn');
-  const listEl = document.getElementById('pickOrgsList');
-  btn.disabled = true;
-  btn.textContent = 'Loading…';
-  listEl.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:13px">Fetching orgs…</div>';
-  try {
-    _allOrgPickerItems = await fetchAllPages('/organizations');
-    _allOrgPickerItems.sort((a, b) => a.login.localeCompare(b.login));
-    renderPickOrgsList();
-    btn.textContent = 'Reload';
-  } catch(e) {
-    listEl.innerHTML = `<div style="padding:12px;color:var(--error);font-size:13px">Failed to load: ${escHtml(e.message)}</div>`;
-    btn.textContent = 'Retry';
-  }
-  btn.disabled = false;
+  // "Reload" button — reset and start fresh
+  initOrgPicker();
 }
 
 function renderPickOrgsList() {
+  // re-render list applying current search filter against loaded items
   const listEl = document.getElementById('pickOrgsList');
   const filter = (document.getElementById('pickOrgsSearch')?.value || '').toLowerCase();
   const picked = new Set(state.settings.pickedOrgs || []);
+  listEl.innerHTML = '';
   const visible = _allOrgPickerItems.filter(o => !filter || o.login.toLowerCase().includes(filter));
-  if (!visible.length) {
-    listEl.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:13px">No orgs match</div>';
-    updatePickOrgsCount();
-    return;
+  visible.forEach(org => listEl.appendChild(makeOrgPickerRow(org, picked)));
+  if (!_orgPickerDone && !filter) {
+    // re-attach scroll to continue lazy load
+    listEl.onscroll = () => {
+      if (listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 40) loadNextOrgPage();
+    };
   }
-  listEl.innerHTML = visible.map(org => `
-    <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:13px"
-      onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''">
-      <input type="checkbox" value="${escHtml(org.login)}" ${picked.has(org.login) ? 'checked' : ''}
-        onchange="onPickOrgToggle(this)" style="width:15px;height:15px;cursor:pointer;accent-color:var(--accent)" />
-      ${org.avatar_url ? `<img src="${escHtml(org.avatar_url)}" style="width:20px;height:20px;border-radius:4px;flex-shrink:0"
-        onerror="this.style.display='none'" />` : ''}
-      <span style="color:var(--text)">${escHtml(org.login)}</span>
-    </label>`).join('');
+  if (!visible.length && filter) {
+    listEl.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:13px">No orgs match — scroll down to load more</div>';
+  }
   updatePickOrgsCount();
 }
 
