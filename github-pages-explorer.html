@@ -275,7 +275,51 @@
 
     .sort-select:focus { border-color: var(--accent); }
 
+    .filter-select {
+      padding: 7px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 13px;
+      cursor: pointer;
+      outline: none;
+    }
+
+    .filter-select:focus { border-color: var(--accent); }
+
+    .filter-select.active {
+      border-color: var(--accent);
+      background: var(--tag-bg);
+      color: var(--tag-text);
+    }
+
+    .clear-filters-btn {
+      padding: 6px 10px;
+      border: 1px solid var(--error);
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--error);
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .clear-filters-btn:hover { background: var(--error-bg); }
+
     .results-count { font-size: 13px; color: var(--text-muted); }
+
+    /* ── Sortable table headers ──────────────────────────────────────── */
+    .cards-table th.sortable {
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    .cards-table th.sortable:hover { color: var(--accent); }
+
+    .sort-indicator { margin-left: 4px; font-size: 10px; opacity: 0.6; }
+    .sort-indicator.active { opacity: 1; color: var(--accent); }
 
     /* ── View toggle ─────────────────────────────────────────────────── */
     .view-toggle {
@@ -1048,8 +1092,25 @@
           <option value="name">Sort: Name A–Z</option>
           <option value="name-desc">Sort: Name Z–A</option>
           <option value="updated">Sort: Recently Updated</option>
+          <option value="updated-asc">Sort: Oldest Updated</option>
           <option value="org">Sort: Org A–Z</option>
+          <option value="org-desc">Sort: Org Z–A</option>
         </select>
+        <select class="filter-select" id="filterStatus" onchange="applyFilters()" title="Filter by status">
+          <option value="">Status: All</option>
+          <option value="active">Status: Active</option>
+          <option value="archived">Status: Archived</option>
+        </select>
+        <select class="filter-select" id="filterTags" onchange="applyFilters()" title="Filter by tags">
+          <option value="">Tags: All</option>
+          <option value="tagged">Has tags</option>
+          <option value="untagged">No tags</option>
+        </select>
+        <select class="filter-select" id="filterStarredSelect" onchange="applyFilters()" title="Filter by starred">
+          <option value="">Starred: All</option>
+          <option value="starred">Starred only</option>
+        </select>
+        <button id="clearFiltersBtn" class="clear-filters-btn" onclick="clearFilters()" style="display:none">✕ Clear filters</button>
       </div>
       <div class="view-toggle">
         <button class="view-btn" id="vbtn-table" title="Table" onclick="setView('table')">
@@ -2172,11 +2233,32 @@ function applyFilters({ appendOnly = false } = {}) {
   state.search = document.getElementById('searchInput').value.toLowerCase();
   state.sort = document.getElementById('sortSelect')?.value || 'name';
 
+  const filterStatus   = document.getElementById('filterStatus')?.value || '';
+  const filterTags     = document.getElementById('filterTags')?.value || '';
+  const filterStarredSel = document.getElementById('filterStarredSelect')?.value || '';
+
+  // highlight active filter selects
+  ['filterStatus','filterTags','filterStarredSelect'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('active', !!el.value);
+  });
+
+  // show/hide clear button
+  const anyFilter = filterStatus || filterTags || filterStarredSel || state.filters.org || state.filters.tag || state.filters.starred;
+  const clearBtn = document.getElementById('clearFiltersBtn');
+  if (clearBtn) clearBtn.style.display = anyFilter ? 'inline-block' : 'none';
+
   let list = [...state.allPages, ...state.manualPages];
 
   if (state.filters.org) list = list.filter(p => p.org === state.filters.org);
   if (state.filters.tag) list = list.filter(p => (state.tags[p.fullName] || []).includes(state.filters.tag));
   if (state.filters.starred) list = list.filter(p => state.starred[p.fullName]);
+
+  if (filterStatus === 'archived') list = list.filter(p => p.archived);
+  if (filterStatus === 'active')   list = list.filter(p => !p.archived);
+  if (filterTags === 'tagged')     list = list.filter(p => (state.tags[p.fullName] || []).length > 0);
+  if (filterTags === 'untagged')   list = list.filter(p => (state.tags[p.fullName] || []).length === 0);
+  if (filterStarredSel === 'starred') list = list.filter(p => state.starred[p.fullName]);
 
   if (state.search) {
     list = list.filter(p =>
@@ -2189,10 +2271,12 @@ function applyFilters({ appendOnly = false } = {}) {
   }
 
   list.sort((a, b) => {
-    if (state.sort === 'name') return a.name.localeCompare(b.name);
-    if (state.sort === 'name-desc') return b.name.localeCompare(a.name);
-    if (state.sort === 'updated') return (b.updatedAt || '').localeCompare(a.updatedAt || '');
-    if (state.sort === 'org') return a.org.localeCompare(b.org);
+    if (state.sort === 'name')        return a.name.localeCompare(b.name);
+    if (state.sort === 'name-desc')   return b.name.localeCompare(a.name);
+    if (state.sort === 'updated')     return (b.updatedAt || '').localeCompare(a.updatedAt || '');
+    if (state.sort === 'updated-asc') return (a.updatedAt || '').localeCompare(b.updatedAt || '');
+    if (state.sort === 'org')         return a.org.localeCompare(b.org);
+    if (state.sort === 'org-desc')    return b.org.localeCompare(a.org);
     return 0;
   });
 
@@ -2417,15 +2501,21 @@ function tableRowHTML(p) {
 
 function tableHTML(slice) {
   const rows = (slice || state.filtered).map(tableRowHTML).join('');
+  const s = state.sort;
+  const ind = (col, asc, desc) => {
+    if (s === asc)  return `<span class="sort-indicator active">▲</span>`;
+    if (s === desc) return `<span class="sort-indicator active">▼</span>`;
+    return `<span class="sort-indicator">⇅</span>`;
+  };
 
   return `<table class="cards-table">
     <thead>
       <tr>
-        <th>Name</th>
-        <th>Org</th>
+        <th class="sortable" onclick="setSortCol('name','name-desc')" title="Sort by name">Name${ind('name','name','name-desc')}</th>
+        <th class="sortable" onclick="setSortCol('org','org-desc')" title="Sort by org">Org${ind('org','org','org-desc')}</th>
         <th>Description</th>
         <th>Tags</th>
-        <th>Updated</th>
+        <th class="sortable" onclick="setSortCol('updated','updated-asc')" title="Sort by last updated">Updated${ind('updated','updated','updated-asc')}</th>
         <th>Status</th>
         <th>Actions</th>
       </tr>
@@ -2479,6 +2569,26 @@ function showAllOrgs() {
 }
 
 // ── Filters ───────────────────────────────────────────────────────────────────
+function clearFilters() {
+  const ids = ['filterStatus', 'filterTags', 'filterStarredSelect'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.value = ''; el.classList.remove('active'); }
+  });
+  state.filters.org = null;
+  state.filters.tag = null;
+  state.filters.starred = false;
+  applyFilters();
+  renderSidebar();
+}
+
+function setSortCol(asc, desc) {
+  const sel = document.getElementById('sortSelect');
+  if (!sel) return;
+  sel.value = sel.value === asc ? desc : asc;
+  applyFilters();
+}
+
 function filterByOrg(org) {
   state.filters.org = org;
   state.selectedOrg = org;
