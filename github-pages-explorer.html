@@ -1301,10 +1301,7 @@ const GH_BASE = (() => {
 const GH_CLIENT_ID = 'b3f5861c39e3c96a65b6';
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-let _devicePollTimer = null;
-
 function logout() {
-  cancelDeviceFlow();
   localStorage.removeItem('ghpe_token');
   localStorage.removeItem('ghpe_cache');
   state.settings.ghToken = '';
@@ -1321,94 +1318,60 @@ function submitToken() {
   window.location.reload();
 }
 
-function showLoginTab(tab) {
-  const dfTab  = document.getElementById('loginTabDevice');
-  const patTab = document.getElementById('loginTabPat');
-  const dfPane  = document.getElementById('loginPaneDevice');
-  const patPane = document.getElementById('loginPanePat');
-  if (!dfTab) return;
-  const onDevice = tab === 'device';
-  dfTab.style.borderBottom  = onDevice ? '2px solid var(--accent)' : '2px solid transparent';
-  dfTab.style.color          = onDevice ? 'var(--accent)' : 'var(--text-muted)';
-  patTab.style.borderBottom = onDevice ? '2px solid transparent' : '2px solid var(--accent)';
-  patTab.style.color         = onDevice ? 'var(--text-muted)' : 'var(--accent)';
-  dfPane.style.display  = onDevice ? 'block' : 'none';
-  patPane.style.display = onDevice ? 'none'  : 'block';
+function openTokenPage() {
+  const url = `${GH_BASE}/settings/tokens/new?scopes=read%3Aorg%2Crepo&description=SAP+Pages+Explorer`;
+  window.open(url, '_blank', 'noopener');
+  // Show the paste step after a short delay so the user sees the transition
+  setTimeout(() => {
+    const step1 = document.getElementById('patStep1');
+    const step2 = document.getElementById('patStep2');
+    if (step1) step1.style.display = 'none';
+    if (step2) step2.style.display = 'block';
+    const inp = document.getElementById('patInput');
+    if (inp) inp.focus();
+  }, 800);
 }
 
 function showLoginScreen(errorMsg = '') {
-  cancelDeviceFlow();
   document.body.innerHTML = `
     <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);font-family:var(--font)">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:40px 40px 36px;max-width:460px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,0.12)">
+
         <div style="text-align:center;margin-bottom:24px">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="var(--text)" style="margin-bottom:14px"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
           <h1 style="font-size:22px;font-weight:700;margin-bottom:6px;color:var(--text)">SAP Pages Explorer</h1>
-          <p style="color:var(--text-muted);font-size:14px">Sign in to browse GitHub Pages sites.</p>
+          <p style="color:var(--text-muted);font-size:14px">Connect your GitHub account to get started.</p>
         </div>
 
-        ${errorMsg ? `<div style="background:var(--error-bg);color:var(--error);border:1px solid var(--error);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:16px">${errorMsg}</div>` : ''}
+        ${errorMsg ? `<div style="background:var(--error-bg);color:var(--error);border:1px solid var(--error);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:20px">${errorMsg}</div>` : ''}
 
-        <!-- Tabs -->
-        <div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:22px;gap:0">
-          <button id="loginTabDevice" onclick="showLoginTab('device')"
-            style="flex:1;padding:9px 0;background:none;border:none;border-bottom:2px solid var(--accent);color:var(--accent);font-size:13px;font-weight:600;cursor:pointer;transition:color 0.15s">
-            Sign in with GitHub
+        <!-- Step 1: generate token -->
+        <div id="patStep1">
+          <p style="font-size:13px;color:var(--text-muted);line-height:1.7;margin-bottom:20px">
+            This app needs a <strong style="color:var(--text)">Personal Access Token</strong> to read your GitHub orgs and repos.
+            Click below — the token creation page opens pre-filled with the right scopes. Just scroll down and click
+            <strong style="color:var(--text)">Generate token</strong>.
+          </p>
+          <button onclick="openTokenPage()"
+            style="width:100%;padding:12px 20px;background:var(--accent);color:var(--accent-text);border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;transition:opacity 0.2s;display:flex;align-items:center;justify-content:center;gap:8px;box-sizing:border-box"
+            onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            Open GitHub to generate token ↗
           </button>
-          <button id="loginTabPat" onclick="showLoginTab('pat')"
-            style="flex:1;padding:9px 0;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:13px;font-weight:600;cursor:pointer;transition:color 0.15s">
-            Personal Access Token
-          </button>
+          <p style="margin-top:14px;text-align:center;font-size:12px;color:var(--text-muted)">
+            Already have a token?
+            <button onclick="document.getElementById('patStep1').style.display='none';document.getElementById('patStep2').style.display='block';document.getElementById('patInput').focus()"
+              style="background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;text-decoration:underline;padding:0">
+              Paste it here
+            </button>
+          </p>
         </div>
 
-        <!-- Device Flow pane -->
-        <div id="loginPaneDevice">
-          <div id="deviceFlowIdle">
-            <p style="font-size:13px;color:var(--text-muted);line-height:1.6;margin-bottom:18px;text-align:center">
-              No token needed. Click the button below — you'll get a short code to enter on GitHub to authorize this app.
-            </p>
-            <button onclick="startDeviceFlow()"
-              style="width:100%;padding:11px 20px;background:var(--accent);color:var(--accent-text);border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;transition:opacity 0.2s"
-              onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-              Sign in with GitHub
-            </button>
-          </div>
-
-          <div id="deviceFlowActive" style="display:none;text-align:center">
-            <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px">
-              1. Copy this code &nbsp;2. Open the link &nbsp;3. Paste the code
-            </p>
-            <div id="deviceUserCode"
-              style="font-size:32px;font-weight:700;letter-spacing:6px;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px 0;margin-bottom:14px;cursor:pointer;user-select:all"
-              title="Click to copy" onclick="copyDeviceCode()">—</div>
-            <button id="deviceOpenBtn" onclick="openDeviceUrl()" target="_blank"
-              style="width:100%;padding:10px 20px;background:var(--accent);color:var(--accent-text);border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:10px;transition:opacity 0.2s"
-              onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-              Open GitHub to authorize ↗
-            </button>
-            <div id="deviceStatus" style="font-size:12px;color:var(--text-muted);min-height:18px;margin-bottom:10px"></div>
-            <button onclick="cancelDeviceFlow()" style="background:none;border:none;color:var(--text-muted);font-size:12px;cursor:pointer;text-decoration:underline">Cancel</button>
-          </div>
-
-          <div id="deviceFlowError" style="display:none">
-            <div id="deviceErrorMsg" style="background:var(--error-bg);color:var(--error);border:1px solid var(--error);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px"></div>
-            <button onclick="startDeviceFlow()"
-              style="width:100%;padding:10px 20px;background:var(--accent);color:var(--accent-text);border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity 0.2s"
-              onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-              Try again
-            </button>
-          </div>
-        </div>
-
-        <!-- PAT pane -->
-        <div id="loginPanePat" style="display:none">
-          <label style="display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px">
-            Personal Access Token
-            <a href="${GH_BASE}/settings/tokens/new?scopes=read%3Aorg%2Crepo&description=SAP+Pages+Explorer" target="_blank" rel="noopener"
-              style="font-weight:400;color:var(--accent);text-decoration:none;margin-left:6px;font-size:12px">
-              Create one ↗
-            </a>
-          </label>
+        <!-- Step 2: paste token -->
+        <div id="patStep2" style="display:none">
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;line-height:1.6">
+            Copy the generated token from GitHub and paste it below.
+          </p>
           <input id="patInput" type="password" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
             style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:14px;outline:none;margin-bottom:6px;box-sizing:border-box"
             onkeydown="if(event.key==='Enter')submitToken()"
@@ -1419,115 +1382,28 @@ function showLoginScreen(errorMsg = '') {
             onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
             Connect
           </button>
-          <p style="margin-top:16px;font-size:11px;color:var(--text-muted);line-height:1.6;text-align:center">
-            Token is stored only in your browser's <code style="background:var(--surface2);padding:1px 4px;border-radius:3px">localStorage</code> — never sent anywhere else.<br>
-            Required scopes: <code style="background:var(--surface2);padding:1px 4px;border-radius:3px">read:org</code> and <code style="background:var(--surface2);padding:1px 4px;border-radius:3px">repo</code>
+          <p style="margin-top:14px;text-align:center;font-size:12px;color:var(--text-muted)">
+            Need a token first?
+            <button onclick="document.getElementById('patStep2').style.display='none';document.getElementById('patStep1').style.display='block'"
+              style="background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;text-decoration:underline;padding:0">
+              Go back
+            </button>
+          </p>
+          <p style="margin-top:10px;font-size:11px;color:var(--text-muted);line-height:1.6;text-align:center">
+            Stored only in your browser's <code style="background:var(--surface2);padding:1px 4px;border-radius:3px">localStorage</code> — never sent anywhere else.
           </p>
         </div>
+
       </div>
     </div>`;
-}
 
-// ── OAuth Device Flow ──────────────────────────────────────────────────────────
-let _deviceVerificationUri = '';
-let _deviceUserCode = '';
-
-function cancelDeviceFlow() {
-  if (_devicePollTimer) { clearTimeout(_devicePollTimer); _devicePollTimer = null; }
-}
-
-function copyDeviceCode() {
-  navigator.clipboard.writeText(_deviceUserCode).catch(() => {});
-  const el = document.getElementById('deviceUserCode');
-  if (el) { const orig = el.textContent; el.textContent = 'Copied!'; setTimeout(() => { el.textContent = orig; }, 1200); }
-}
-
-function openDeviceUrl() {
-  if (_deviceVerificationUri) window.open(_deviceVerificationUri, '_blank', 'noopener');
-}
-
-function setDevicePane(pane) {
-  ['deviceFlowIdle','deviceFlowActive','deviceFlowError'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.display = id === pane ? 'block' : 'none';
-  });
-}
-
-async function startDeviceFlow() {
-  setDevicePane('deviceFlowIdle');
-  const btn = document.querySelector('#deviceFlowIdle button');
-  if (btn) { btn.disabled = true; btn.textContent = 'Requesting code…'; }
-
-  try {
-    const res = await fetch(`${GH_BASE}/login/device/code`, {
-      method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: GH_CLIENT_ID, scope: 'read:org repo' }),
-    });
-    if (!res.ok) throw new Error(`GitHub returned ${res.status}`);
-    const data = await res.json();
-    if (!data.device_code || !data.user_code) throw new Error(data.error_description || 'Unexpected response from GitHub');
-
-    _deviceVerificationUri = data.verification_uri || `${GH_BASE}/login/device`;
-    _deviceUserCode = data.user_code;
-
-    const codeEl = document.getElementById('deviceUserCode');
-    if (codeEl) codeEl.textContent = data.user_code;
-
-    setDevicePane('deviceFlowActive');
-    pollDeviceFlow(data.device_code, data.interval || 5, Date.now() + (data.expires_in || 900) * 1000);
-  } catch (err) {
-    const msgEl = document.getElementById('deviceErrorMsg');
-    if (msgEl) msgEl.textContent = `Could not start sign-in: ${err.message}`;
-    setDevicePane('deviceFlowError');
+  // If an error is shown, skip straight to the paste step
+  if (errorMsg) {
+    const s1 = document.getElementById('patStep1');
+    const s2 = document.getElementById('patStep2');
+    if (s1) s1.style.display = 'none';
+    if (s2) s2.style.display = 'block';
   }
-}
-
-function pollDeviceFlow(deviceCode, interval, expiresAt) {
-  if (Date.now() > expiresAt) {
-    const msgEl = document.getElementById('deviceErrorMsg');
-    if (msgEl) msgEl.textContent = 'The code expired. Please try again.';
-    setDevicePane('deviceFlowError');
-    return;
-  }
-
-  _devicePollTimer = setTimeout(async () => {
-    try {
-      const res = await fetch(`${GH_BASE}/login/oauth/access_token`, {
-        method: 'POST',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: GH_CLIENT_ID, device_code: deviceCode, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }),
-      });
-      const data = await res.json();
-
-      if (data.access_token) {
-        localStorage.setItem('ghpe_token', data.access_token);
-        window.location.reload();
-        return;
-      }
-
-      const statusEl = document.getElementById('deviceStatus');
-      if (data.error === 'authorization_pending') {
-        if (statusEl) statusEl.textContent = 'Waiting for authorization…';
-        pollDeviceFlow(deviceCode, interval, expiresAt);
-      } else if (data.error === 'slow_down') {
-        if (statusEl) statusEl.textContent = 'Waiting…';
-        pollDeviceFlow(deviceCode, interval + 5, expiresAt);
-      } else if (data.error === 'expired_token') {
-        const msgEl = document.getElementById('deviceErrorMsg');
-        if (msgEl) msgEl.textContent = 'The code expired. Please try again.';
-        setDevicePane('deviceFlowError');
-      } else if (data.error === 'access_denied') {
-        const msgEl = document.getElementById('deviceErrorMsg');
-        if (msgEl) msgEl.textContent = 'Authorization was denied.';
-        setDevicePane('deviceFlowError');
-      } else {
-        pollDeviceFlow(deviceCode, interval, expiresAt);
-      }
-    } catch {
-      pollDeviceFlow(deviceCode, interval, expiresAt);
-    }
-  }, interval * 1000);
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -1814,7 +1690,7 @@ async function ghFetch(path, params = {}) {
     if (res.status === 401) {
       localStorage.removeItem('ghpe_token');
       state.settings.ghToken = '';
-      showLoginScreen('Your session has expired or been revoked. Please sign in again.');
+      showLoginScreen('Your token has expired or been revoked. Please generate a new one.');
       throw new Error('401 Unauthorised');
     }
     const msg = await res.text().catch(() => '');
