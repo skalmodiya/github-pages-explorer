@@ -1096,24 +1096,24 @@
           <option value="org">Sort: Org A–Z</option>
           <option value="org-desc">Sort: Org Z–A</option>
         </select>
-        <select class="filter-select" id="filterStatus" onchange="applyFilters()" title="Filter by status">
-          <option value="">Status: All</option>
-          <option value="active">Status: Active</option>
-          <option value="archived">Status: Archived</option>
+        <input class="filter-select" id="filterName" type="text" placeholder="Filter name…"
+          style="width:130px" oninput="debounceApplyFilters()" title="Filter by repo name" autocomplete="off" />
+        <select class="filter-select" id="filterOrg" onchange="applyFilters()" title="Filter by org">
+          <option value="">Org: All</option>
         </select>
         <select class="filter-select" id="filterTags" onchange="applyFilters()" title="Filter by tags">
           <option value="">Tags: All</option>
           <option value="tagged">Has tags</option>
           <option value="untagged">No tags</option>
         </select>
+        <select class="filter-select" id="filterStatus" onchange="applyFilters()" title="Filter by status">
+          <option value="">Status: All</option>
+          <option value="active">Status: Active</option>
+          <option value="archived">Status: Archived</option>
+        </select>
         <select class="filter-select" id="filterStarredSelect" onchange="applyFilters()" title="Filter by starred">
           <option value="">Starred: All</option>
           <option value="starred">Starred only</option>
-        </select>
-        <input class="filter-select" id="filterName" type="text" placeholder="Filter name…"
-          style="width:130px" oninput="debounceApplyFilters()" title="Filter by repo name" autocomplete="off" />
-        <select class="filter-select" id="filterOrg" onchange="applyFilters()" title="Filter by org">
-          <option value="">Org: All</option>
         </select>
         <button id="clearFiltersBtn" class="clear-filters-btn" onclick="clearFilters()" style="display:none">✕ Clear filters</button>
       </div>
