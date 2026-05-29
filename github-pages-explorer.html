@@ -1110,6 +1110,10 @@
           <option value="">Starred: All</option>
           <option value="starred">Starred only</option>
         </select>
+        <input class="filter-select" id="filterName" type="text" placeholder="Filter name…"
+          style="width:130px" oninput="debounceApplyFilters()" title="Filter by repo name" autocomplete="off" />
+        <input class="filter-select" id="filterOrg" type="text" placeholder="Filter org…"
+          style="width:120px" oninput="debounceApplyFilters()" title="Filter by org" autocomplete="off" />
         <button id="clearFiltersBtn" class="clear-filters-btn" onclick="clearFilters()" style="display:none">✕ Clear filters</button>
       </div>
       <div class="view-toggle">
@@ -2233,18 +2237,24 @@ function applyFilters({ appendOnly = false } = {}) {
   state.search = document.getElementById('searchInput').value.toLowerCase();
   state.sort = document.getElementById('sortSelect')?.value || 'name';
 
-  const filterStatus   = document.getElementById('filterStatus')?.value || '';
-  const filterTags     = document.getElementById('filterTags')?.value || '';
+  const filterStatus     = document.getElementById('filterStatus')?.value || '';
+  const filterTags       = document.getElementById('filterTags')?.value || '';
   const filterStarredSel = document.getElementById('filterStarredSelect')?.value || '';
+  const filterName       = (document.getElementById('filterName')?.value || '').toLowerCase().trim();
+  const filterOrg        = (document.getElementById('filterOrg')?.value || '').toLowerCase().trim();
 
   // highlight active filter selects
   ['filterStatus','filterTags','filterStarredSelect'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('active', !!el.value);
   });
+  ['filterName','filterOrg'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('active', !!el.value);
+  });
 
   // show/hide clear button
-  const anyFilter = filterStatus || filterTags || filterStarredSel || state.filters.org || state.filters.tag || state.filters.starred;
+  const anyFilter = filterStatus || filterTags || filterStarredSel || filterName || filterOrg || state.filters.org || state.filters.tag || state.filters.starred;
   const clearBtn = document.getElementById('clearFiltersBtn');
   if (clearBtn) clearBtn.style.display = anyFilter ? 'inline-block' : 'none';
 
@@ -2259,6 +2269,8 @@ function applyFilters({ appendOnly = false } = {}) {
   if (filterTags === 'tagged')     list = list.filter(p => (state.tags[p.fullName] || []).length > 0);
   if (filterTags === 'untagged')   list = list.filter(p => (state.tags[p.fullName] || []).length === 0);
   if (filterStarredSel === 'starred') list = list.filter(p => state.starred[p.fullName]);
+  if (filterName) list = list.filter(p => p.name.toLowerCase().includes(filterName));
+  if (filterOrg)  list = list.filter(p => p.org.toLowerCase().includes(filterOrg));
 
   if (state.search) {
     list = list.filter(p =>
@@ -2570,7 +2582,7 @@ function showAllOrgs() {
 
 // ── Filters ───────────────────────────────────────────────────────────────────
 function clearFilters() {
-  const ids = ['filterStatus', 'filterTags', 'filterStarredSelect'];
+  const ids = ['filterStatus', 'filterTags', 'filterStarredSelect', 'filterName', 'filterOrg'];
   ids.forEach(id => {
     const el = document.getElementById(id);
     if (el) { el.value = ''; el.classList.remove('active'); }
@@ -2580,6 +2592,12 @@ function clearFilters() {
   state.filters.starred = false;
   applyFilters();
   renderSidebar();
+}
+
+let _filterDebounceTimer = null;
+function debounceApplyFilters() {
+  clearTimeout(_filterDebounceTimer);
+  _filterDebounceTimer = setTimeout(applyFilters, 200);
 }
 
 function setSortCol(asc, desc) {
