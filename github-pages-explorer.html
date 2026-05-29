@@ -1112,8 +1112,9 @@
         </select>
         <input class="filter-select" id="filterName" type="text" placeholder="Filter name…"
           style="width:130px" oninput="debounceApplyFilters()" title="Filter by repo name" autocomplete="off" />
-        <input class="filter-select" id="filterOrg" type="text" placeholder="Filter org…"
-          style="width:120px" oninput="debounceApplyFilters()" title="Filter by org" autocomplete="off" />
+        <select class="filter-select" id="filterOrg" onchange="applyFilters()" title="Filter by org">
+          <option value="">Org: All</option>
+        </select>
         <button id="clearFiltersBtn" class="clear-filters-btn" onclick="clearFilters()" style="display:none">✕ Clear filters</button>
       </div>
       <div class="view-toggle">
@@ -2241,7 +2242,7 @@ function applyFilters({ appendOnly = false } = {}) {
   const filterTags       = document.getElementById('filterTags')?.value || '';
   const filterStarredSel = document.getElementById('filterStarredSelect')?.value || '';
   const filterName       = (document.getElementById('filterName')?.value || '').toLowerCase().trim();
-  const filterOrg        = (document.getElementById('filterOrg')?.value || '').toLowerCase().trim();
+  const filterOrg        = document.getElementById('filterOrg')?.value || '';
 
   // highlight active filter selects
   ['filterStatus','filterTags','filterStarredSelect'].forEach(id => {
@@ -2270,7 +2271,7 @@ function applyFilters({ appendOnly = false } = {}) {
   if (filterTags === 'untagged')   list = list.filter(p => (state.tags[p.fullName] || []).length === 0);
   if (filterStarredSel === 'starred') list = list.filter(p => state.starred[p.fullName]);
   if (filterName) list = list.filter(p => p.name.toLowerCase().includes(filterName));
-  if (filterOrg)  list = list.filter(p => p.org.toLowerCase().includes(filterOrg));
+  if (filterOrg)  list = list.filter(p => p.org === filterOrg);
 
   if (state.search) {
     list = list.filter(p =>
@@ -2314,6 +2315,7 @@ function applyFilters({ appendOnly = false } = {}) {
 
   _cardsRendered = 0;
   renderCards();
+  populateOrgDropdown();
 }
 
 function renderCards() {
@@ -2581,6 +2583,16 @@ function showAllOrgs() {
 }
 
 // ── Filters ───────────────────────────────────────────────────────────────────
+function populateOrgDropdown() {
+  const sel = document.getElementById('filterOrg');
+  if (!sel) return;
+  const current = sel.value;
+  const orgs = [...new Set([...state.allPages, ...state.manualPages].map(p => p.org))].sort((a, b) => a.localeCompare(b));
+  sel.innerHTML = '<option value="">Org: All</option>' +
+    orgs.map(o => `<option value="${escHtml(o)}"${o === current ? ' selected' : ''}>${escHtml(o)}</option>`).join('');
+  sel.classList.toggle('active', !!sel.value);
+}
+
 function clearFilters() {
   const ids = ['filterStatus', 'filterTags', 'filterStarredSelect', 'filterName', 'filterOrg'];
   ids.forEach(id => {
